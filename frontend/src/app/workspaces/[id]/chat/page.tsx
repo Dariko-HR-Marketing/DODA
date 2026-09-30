@@ -61,6 +61,13 @@ export default function ChatPage() {
   const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  // Guards against a stale listConversationMessages() response (kicked off
+  // for a conversation the user has since navigated away from, e.g. a
+  // handleSend() finally-block refresh for A still in flight when the user
+  // clicks "new conversation" and switches to B) overwriting the messages
+  // that are correctly displayed for whatever conversation is current by
+  // the time it resolves.
+  const messagesRequestIdRef = useRef(0);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<MessageOut[] | null>(null);
   const [searching, setSearching] = useState(false);
@@ -93,9 +100,16 @@ export default function ChatPage() {
 
   const refreshMessages = useCallback(() => {
     if (sessionId === null || selectedId === null) return;
+    const requestId = ++messagesRequestIdRef.current;
     listConversationMessages(sessionId, workspaceId, selectedId)
-      .then(setMessages)
-      .catch((err) => setError(err instanceof ApiError ? err.message : "Xabarlarni yuklab bo'lmadi."));
+      .then((list) => {
+        if (messagesRequestIdRef.current === requestId) setMessages(list);
+      })
+      .catch((err) => {
+        if (messagesRequestIdRef.current === requestId) {
+          setError(err instanceof ApiError ? err.message : "Xabarlarni yuklab bo'lmadi.");
+        }
+      });
   }, [sessionId, workspaceId, selectedId]);
 
   useEffect(() => {

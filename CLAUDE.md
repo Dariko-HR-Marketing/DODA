@@ -8324,3 +8324,92 @@ tekshiruvlarini (lint/format/mypy/testlar) real Postgres+Redis'ga qarshi
 takrorlab tasdiqlaydi, shuning uchun amaliy qamrov saqlanadi, lekin GitHub
 UI'sida "yashil check" ko'rinmaydi — PR ochilganda birinchi push CI'ni
 avtomatik ishga tushiradi.
+
+**Ikkita haqiqiy xato topildi va tuzatildi — sof sog'liq tekshiruvi
+jarayonida, hech qanday yangi FR/ID qamrovi kerak bo'lmagan ikki alohida
+bug fix.**
+
+**Birinchisi — CI'ni haqiqatda buzadigan, hali hech kim payqamagan
+regressiya: `backend/scripts/seed_e2e_demo.py` endi ishlamas edi.**
+17-`/simplify` pass (`propose_action`'ning `actor_kind` parametridan
+defaultni olib tashlash, FR-AUTH-009 R2-cap bypass'ini yopgan tuzatish)
+BARCHA chaqiruvchilarni yangilagan edi — testlar, `ai_tools.py`,
+`api/actions.py` — LEKIN `scripts/`papkasi ikkala tekshiruv qamrovidan
+ham (pytest, CI'ning `mypy src/doda`) ATAYLAB tashqarida qoldirilgani
+uchun bu bitta chaqiruv nuqtasi ko'rinmay qolgan edi. Amaliy oqibat:
+har safar `.github/workflows/ci.yml`ning `e2e` job'i chaqirsa (yoki
+kimdir mahalliy E2E'ni qo'lda seed qilsa), skript darhol `TypeError:
+propose_action() missing 1 required keyword-only argument: 'actor_kind'`
+bilan qulardi — demak keyingi haqiqiy CI E2E ishga tushishi (birinchi
+ochiladigan PR bilan) butunlay muvaffaqiyatsiz bo'lardi, garchi 572 ta
+backend test va butun `ruff`/`mypy src/doda` toza bo'lsa ham.
+
+Tuzatish: `ActorKind` import qilinib, chaqiruvga `actor_kind=ActorKind.
+HUMAN` qo'shildi (demo seed'ning o'zi doim inson stsenariysi). Barcha 11
+CI-mos prefiks (`E2E_`, `E2E_CUSTOMER_`, `E2E_A11Y_`, `E2E_ARCHIVE_`,
+`E2E_KILLSWITCH_`, `E2E_LOGOUT_`, `E2E_AUDITOR_`, `E2E_AUTHCALLBACK_`,
+`E2E_CHAT_`, `E2E_KNOWLEDGE_`, `E2E_ATTACH_`) qayta seed qilinib,
+barchasi muvaffaqiyatli ishlashi tasdiqlandi. `mypy scripts/` (butun
+papka, 12 skript) ham alohida ishga tushirilib toza ekani ko'rsatildi —
+bu hozircha CI qamroviga kiritilmagan, faqat shu tekshiruv jarayonida
+"agar kiritilsa, hozir ham toza bo'lardi" deb tasdiqlash uchun.
+
+**Ikkinchisi — chat UI'sining o'zida, haqiqiy React race-condition
+xatosi: suhbatni almashtirish paytida eski (stale), hali yakunlanmagan
+javobning yangi suhbatni ustidan yozib yuborishi mumkin edi.**
+`handleSend`'ning `finally` blokidagi `refreshMessages()` chaqiruvi
+kutilmaydi (un-awaited) — foydalanuvchi shu vaqt oralig'ida "Yangi
+suhbat" bosib butunlay boshqa (yangi, bo'sh) suhbatga o'tsa, ESKI
+suhbat uchun kelayotgan GET javobi hali ham `setMessages(...)`ni
+chaqirardi, `selectedId` allaqachon YANGI suhbatga o'zgargan bo'lsa
+ham — natijada yangi, bo'sh suhbat birdan eski suhbatning xabarlari
+bilan "to'lib qolardi".
+
+Bu haqiqiy xato mavjud E2E testning o'zi (qidiruv testi, "Yangi
+suhbat" bosib ikkinchi suhbatga o'tishni sinaydi) tasodifan ushlab
+qoldi — `page.getByText(needle).not.toBeVisible()` kutilmaganda
+"visible" bilan muvaffaqiyatsiz bo'ldi. Tuzatish: `refreshMessages`ga
+monotonik o'suvchi `messagesRequestIdRef` qo'shildi — har bir chaqiruv
+o'zining so'rov ID'sini oladi, javob kelganda joriy ref qiymati bilan
+solishtiriladi, mos kelmasa (orada boshqa chaqiruv sodir bo'lgan bo'lsa)
+`setMessages`/`setError` chaqirilmaydi. Bu naqsh (`useSession.ts`ning
+"birinchi render'da server/client mos kelmasligi" muammosini alohida
+state qo'shmasdan sentinel qiymat bilan hal qilgani kabi) yangi state
+o'zgaruvchisi qo'shmasdan, faqat "eskirgan javobni bilib olish" uchun
+mo'ljallangan.
+
+**Tuzatishning isbotlanishi ikki bosqichda, jiddiy qiyinchilik bilan
+o'tdi — birinchi versiyasi noto'g'ri stsenariyni sinar edi.** Dastlabki
+test `page.route()` orqali ikkala GET'ni (eski VA yangi suhbat uchun)
+BIR XIL kechikish bilan ushlagan, keyin "javob ko'ringanidan keyin"
+`unroute()` chaqirgan edi — bu haqiqiy relative tartibni (eski GET
+birinchi boshlangani uchun birinchi ham tugaydi) tasodifan saqlab
+qolib, racening o'zini umuman sinamas edi. Haqiqiy tarmoq
+so'rovlarini (`page.on("request"/"response")`) vaqt tamg'asi bilan
+kuzatib chiqishda aniqlandi: `handleSend`'ning `finally`dagi GET'i
+javobning EKRANDA ko'rinishidan (streaming/pending holat orqali)
+ANCHA KEYIN, hatto foydalanuvchi "Yangi suhbat"ni bosgandan KEYIN ham
+sodir bo'lishi mumkin — demak `unroute()`ni "javob ko'rindi" nuqtasida
+chaqirish har doim juda erta bo'lib, asl GET hech qachon ushlanmasdan
+o'tib ketardi.
+
+Test to'g'ri dizaynga o'tkazildi: route'ning o'zi FAQAT birinchi
+ko'rgan GET so'rovini (bu doim yuborishning o'z eskirgan javobi, chunki
+u xabar yuborilgandan keyingi birinchi GET) kechiktiradi, undan keyingi
+har qanday GET (yangi suhbatning o'z, tabiiy so'rovi) darhol o'tadi —
+bu haqiqiy ilova xatti-harakatini (ikkinchi GET, xronologik jihatdan
+birinchisidan keyin, lekin tezroq tugaydi) to'g'ri aks ettiradi.
+Audit-zanjiri uslubida to'liq isbotlandi: tuzatish vaqtincha stash
+qilinib, YANGI, to'g'ri dizayndagi test aynan kutilgan sababda
+(eskirgan javob yangi suhbatni haqiqatda qayta yozib) muvaffaqiyatsiz
+bo'lishi ko'rsatildi, keyin tuzatish qaytarilib (production build
+qaytadan qurilib, server qayta ishga tushirilib) aynan shu test
+yashil ekani tasdiqlandi.
+
+572 test (backend, o'zgarishsiz — faqat `seed_e2e_demo.py` ops-skripti
+tuzatildi, pytest qamrovidan tashqarida), barchasi real Postgres'da;
+`ruff`/`mypy src/doda`/`mypy scripts/` toza. Frontend `tsc`/ESLint toza,
+production build muvaffaqiyatli; barcha 17 E2E spec (16 mavjud + yangi
+race-condition regressiya testi) real backend+frontend'ga (production
+build, barcha 10 mustaqil seed prefiksi bilan) qarshi yashil, jumladan
+accessibility skaneri (0 serious/critical WCAG buzilishi).
