@@ -18,9 +18,10 @@ payload and pending approval nonce via the idempotent-replay path.
 
 import enum
 import uuid
+from datetime import datetime
 
+from sqlalchemy import DateTime, Integer, String, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -84,3 +85,14 @@ class Action(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
         SAEnum(ActionStatus, name="action_status", native_enum=False, length=32),
         default=ActionStatus.DRAFT,
     )
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    """FR-ACT-005's persistent (cross-cycle) retry budget — how many times
+    this action has already gone through FAILED -> RETRYING -> READY.
+    Distinct from telegram_relay's own in-process TELEGRAM_SEND_ATTEMPTS,
+    which retries within a single connector call and never touches this
+    column. See application/action_service.record_transient_failure."""
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    """Set when this action is RETRYING; NULL otherwise. Read by
+    application/action_service.promote_due_retries (backend/scripts/
+    promote_due_action_retries_job.py) to decide when a RETRYING action
+    is due to become READY again."""

@@ -8125,3 +8125,105 @@ alohida tasdiqladi. Bu 4-, 6-, 7-, 9-, 10-, 11-, 13-, 14-review'lar
 bilan bir xil — chindan ham toza natija.
 
 571 test, barchasi real Postgres'da (kod o'zgarmadi — sof tekshiruv).
+
+**FR-ACT-005'ning ataylab ochiq qoldirilgan yarmi — "to'liq circuit
+breaker... domain'ning FAILED -> RETRYING -> READY zanjiridan haqiqiy
+foydalanish" — endi qurildi.** `telegram_relay.py`ning o'z docstring'i
+bir necha marta aniq yozgan edi: mavjud `_send_with_retries` faqat
+BITTA yetkazish urinishi ICHIDA, jarayon-ichi (in-process) chegaralangan
+retry qiladi; shu budjet (`TELEGRAM_SEND_ATTEMPTS=3`) tugagach, action
+darhol terminal, xabar beriladigan FAILED'ga o'tardi — sikllararo
+(cross-cycle) qat'iy qaytarish yo'q edi. Bu ID PO qarorini talab
+qilmaydi (Telegram/OD-002 kabi) — sof, avvaldan aniq belgilangan
+muhandislik ishi, shuning uchun QOIDA 2'ni buzmasdan amalga oshirildi.
+
+0028-migratsiya `action_actions`ga ikkita ustun qo'shdi: `retry_count`
+(NOT NULL, standart 0 — mavjud qatorlar uchun `server_default="0"`) va
+`next_retry_at` (nullable — faqat RETRYING paytida to'ldiriladi).
+Bu ikkalasi `telegram_relay`ning O'Z `TELEGRAM_SEND_ATTEMPTS`idan
+BUTUNLAY mustaqil — ikkinchisi bitta chaqiruv ichida, birinchisi
+sikllar orasida ishlaydi.
+
+`action_service.py`ga ikkita yangi funksiya qo'shildi:
+- `record_transient_failure(session, action, *, actor_id) -> bool` —
+  `action.retry_count < MAX_ACTION_RETRIES` (=3) bo'lsa, action'ni
+  FAILED(**notify=False**)->RETRYING orqali o'tkazadi (retry_count
+  oshirilib, eksponensial backoff bilan `next_retry_at` o'rnatiladi) va
+  `True` qaytaradi; budjet tugagan bo'lsa, `apply_transition`ning
+  o'zining ODDIY terminal yo'liga (notify=True) tushib, `False`
+  qaytaradi — bu funksiya qurilishidan OLDINGI xulqning aynan o'zi.
+- `promote_due_retries(session, *, now=None) -> list[Action]` —
+  `fire_due_reminders`ning aynan bir xil "tenant-scoped transaction
+  ichida due qatorlarni topib, holatni o'zgartirish" naqshi: RETRYING
+  va `next_retry_at <= now` bo'lgan action'larni READY'ga qaytaradi va
+  ularning `action.ready.v1` outbox xabarini QAYTA navbatga qo'yadi —
+  aynan shu tool'ni oldin qabul qilgan connector hech qanday maxsus
+  "bu qayta urinish" holatini bilishi shart emas.
+
+`apply_transition`ga yangi `notify: bool = True` parametri qo'shildi
+(standart qiymat barcha mavjud chaqiruv nuqtalarini o'zgarishsiz
+qoldiradi) — FAILED_ACTION bildirishnomasi faqat `notify=True`da
+chiqadi. Bu ataylab: agar oraliq FAILED->RETRYING sakrashi ham
+bildirishnoma yuborsa, sustained outage HAR safar sikl davomida spam
+bildirishnoma yaratardi — bu muammo aynan shu sababdan avvalroq
+to'liq circuit breaker qurilishini to'xtatib turgan edi.
+
+`telegram_relay.py`ning `process_entry`i endi ikkita alohida `except`
+blokiga ega: `TelegramTransientError` (haqiqiy o'tkinchi xato — faqat
+shu holat yangi `_fail_with_retry` orqali persistent retry budjetiga
+yuboriladi) va bazaviy `TelegramSendError` (aniq rad etish — HTTP 400
+yoki ReadTimeout — hech qachon qayta urinilmaydi, to'g'ridan-to'g'ri
+terminal FAILED). Yangi `backend/scripts/promote_due_action_retries_job.py`
+— `fire_due_reminders_job.py` bilan bir xil mustaqil skript shakli
+(`UserCustomerIndex` orqali customer'larni topib, har birida
+`promote_due_retries`ni chaqiradi).
+
+**Ishlab chiqish jarayonida haqiqiy, UC-004'ning o'z "MAJBURIY testlar"
+jadvaliga to'g'ridan-to'g'ri zid bo'lgan xato o'zida topildi va yozishdan
+OLDIN emas, mavjud testlarni qayta ishga tushirishda aniqlandi.**
+Birinchi qoralama `process_entry`da BITTA `except TelegramSendError`
+blokini `_fail_with_retry`ga yo'naltirgan edi — bu HAR QANDAY rad
+etishni (shu jumladan ReadTimeout va HTTP 400 kabi, "xat aslida
+yuborilgan bo'lishi mumkin" yoki "hech qachon muvaffaqiyatli
+bo'lmaydigan" holatlarni) persistent retry budjetiga yuborardi. Bu
+aynan UC-004'ning "provider timeout bergan lekin xat aslida yuborilgan"
+stsenariysini buzardi — ReadTimeout'ni qayta urinish HAQIQIY duplikat
+xabar xavfini keltirib chiqarardi, FR-ACT-005'ning o'zi oldini olishi
+kerak bo'lgan narsa. Mavjud ikkita test
+(`test_a_read_timeout_is_not_retried_even_once`,
+`test_telegram_api_failure_drives_action_to_failed`) buni darhol
+ushladi (ikkalasi ham RETRYING kutilmagan holda paydo bo'lib
+muvaffaqiyatsiz bo'ldi). Tuzatish: `TelegramTransientError`ni ALOHIDA,
+`TelegramSendError`dan OLDIN ushlab, faqat SHU turga persistent retry
+qo'llash — bazaviy `TelegramSendError` (ReadTimeout/400) hamon
+to'g'ridan-to'g'ri terminal FAILED'ga boradi, hech qachon qayta
+urinilmaydi.
+
+Uchta claim ham audit-zanjiri uslubida alohida-alohida isbotlandi
+(vaqtincha buzib, testning aynan kutilgan sababda qizarishini ko'rsatib,
+qaytarib): (1) `notify=False` chiqarib tashlanganda yangi
+`test_a_sustained_transient_outage_within_one_cycle_schedules_a_
+persistent_retry` FAILED_ACTION bildirishnomasi kutilmaganda paydo
+bo'lib muvaffaqiyatsiz bo'ldi; (2) retry-budjet tekshiruvi
+o'chirilganda ham shu test, ham yangi
+`test_persistent_retries_are_also_bounded_and_the_final_one_notifies`
+(to'rtta sikl orqali MAX_ACTION_RETRIES'ni to'liq sarflab, faqat
+OXIRGI FAILED'da bitta FAILED_ACTION bildirishnomasi borligini
+tasdiqlaydi) darhol `retry_count == 0`ga qulab tushib muvaffaqiyatsiz
+bo'ldi; (3) ikkita except blokini birlashtirib, yuqoridagi ikkita
+mavjud test yana o'sha xatoni takrorladi. Uchalasi ham qaytarilgandan
+keyin (`git diff` bilan 0 qoldiq tasdiqlab) yashil.
+
+**Ataylab qolgan bo'shliq (o'zgarmagan)**: `telegram_relay.py`ning o'z
+top-level docstring'idagi "muvaffaqiyatli Telegram chaqiruvi bilan
+SUCCEEDED commit'i orasidagi qulash action'ni RUNNING holatida qotirib
+qo'yishi mumkin" gap'i bu ishga aloqasi yo'q, hamon ochiq —
+`find_stuck_running_actions.py` buni kuzatishda davom etadi. Bu ish
+faqat FAILED yo'lini (persistent retry) qamrab oldi, RUNNING'dagi
+crash-gap'ni emas.
+
+572 test (571+1: `test_a_sustained_transient_outage_within_one_cycle_
+schedules_a_persistent_retry` mavjud testni qayta yozib o'rniga o'tdi,
+`test_persistent_retries_are_also_bounded_and_the_final_one_notifies`
+yangi), barchasi real Postgres+Redis'da; `ruff`/`mypy src/doda` toza;
+migratsiya round-trip (0027→0028→0027→0028) qo'lda tekshirildi.

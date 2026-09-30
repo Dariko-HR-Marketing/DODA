@@ -43,15 +43,24 @@ this gap observable (an Action stuck in RUNNING past a threshold is
 reported, exit code 1) without attempting to resolve it — resolving it
 still needs the design decision above, not a monitoring script.
 
-FR-ACT-005 (Must, "Provider outage simulyatsiyasida ma'lumot yo'qolmaydi"):
-`_send_with_retries` retries a transient Telegram failure (network error,
-timeout, 429, 5xx — `telegram_client.TelegramTransientError`) with
-backoff before this relay gives up on it, so a short-lived outage no
-longer loses the message to an immediate, terminal FAILED. Deliberately
-scoped to in-process bounded retry only — see that function's own
-docstring for what a SUSTAINED outage still does (unchanged from before:
-terminal FAILED, no cross-cycle circuit breaker, no use of the domain's
-FAILED -> RETRYING -> READY chain).
+FR-ACT-005 (Must, "Provider outage simulyatsiyasida ma'lumot yo'qolmaydi")
+now has two independent retry layers. `_send_with_retries` retries a
+transient Telegram failure (network error, timeout, 429, 5xx —
+`telegram_client.TelegramTransientError`) IN-PROCESS, within a single
+delivery attempt, before this relay gives up on that one attempt. If that
+in-process budget (TELEGRAM_SEND_ATTEMPTS) is exhausted, `_fail_with_retry`
+hands off to `action_service.record_transient_failure` — a PERSISTENT,
+cross-cycle retry budget (Action.retry_count/next_retry_at,
+MAX_ACTION_RETRIES) that drives the action through
+FAILED(notify=False) -> RETRYING rather than an immediate, notified
+terminal FAILED. `backend/scripts/promote_due_action_retries_job.py`
+promotes a RETRYING action back to READY once its backoff has elapsed,
+re-enqueueing the same action.ready.v1 outbox message this relay already
+knows how to consume — no special-casing needed here for "this delivery
+is a retry" versus a first attempt. Only once BOTH budgets are exhausted
+does the action land on a terminal, FAILED_ACTION-notified FAILED — see
+record_transient_failure's own docstring for exactly where that boundary
+is.
 
 Honest limitation on THIS PR's own verification: no real Telegram bot
 token or chat is available in this environment, so the actual HTTP call
@@ -72,7 +81,7 @@ import httpx
 import structlog
 from redis.asyncio import Redis
 
-from doda.application.action_service import apply_transition
+from doda.application.action_service import apply_transition, record_transient_failure
 from doda.config import get_settings
 from doda.db import tenant_scoped_session
 from doda.domain.action.models import Action, ActionStatus
@@ -139,6 +148,23 @@ async def _resolve(
         await apply_transition(session, action, target, actor_id=ACTOR_ID, receipt=receipt)
 
 
+async def _fail_with_retry(customer_id: uuid.UUID, action_id: uuid.UUID) -> None:
+    """FR-ACT-005's persistent half — see action_service.
+    record_transient_failure's own docstring. This is the ONLY FAILED path
+    in this module that goes through it: the bot_token-not-configured and
+    malformed-payload FAILED paths above stay on plain _resolve(...,
+    FAILED), since retrying a config error or a bad payload cannot help
+    (the config/payload won't fix itself), and this codebase's
+    "isbotlamasdan taxmin qilma" discipline means only a scenario actually
+    proven to be transient (a Telegram send that raised TelegramSendError
+    after _send_with_retries' own in-process attempts) gets the retry
+    budget."""
+    async with tenant_scoped_session(customer_id) as session:
+        action = await session.get(Action, action_id)
+        assert action is not None
+        await record_transient_failure(session, action, actor_id=ACTOR_ID)
+
+
 async def _send_with_retries(
     http_client: httpx.AsyncClient, *, bot_token: str, chat_id: str, text: str, action_id: uuid.UUID
 ) -> TelegramSendResult:
@@ -151,14 +177,16 @@ async def _send_with_retries(
     rather than via the TelegramTransientError subclass) is NOT caught
     here and propagates on the first attempt, exactly as before this fix.
 
-    Deliberately scoped: this is in-process, bounded retry only — it does
-    not implement a cross-cycle circuit breaker, and it does not use the
-    domain's FAILED -> RETRYING -> READY chain (state_machine.py). A
-    SUSTAINED outage beyond TELEGRAM_SEND_ATTEMPTS still ends in a
-    terminal FAILED, same as before this fix, requiring the action to be
-    re-proposed — that remains real, honestly-scoped future work (see the
-    module's own top-level docstring for the analogous "stuck RUNNING"
-    gap this does not close either).
+    Deliberately scoped: this is in-process, bounded retry only, for a
+    single delivery attempt. It does not itself implement a cross-cycle
+    circuit breaker — an outage that outlasts TELEGRAM_SEND_ATTEMPTS
+    within one attempt is handed to `action_service.record_transient_failure`
+    by this module's `process_entry` (via `_fail_with_retry`), which is
+    where the domain's FAILED -> RETRYING -> READY chain and its own,
+    persistent retry budget live (see the module's own top-level docstring
+    and that function's docstring). This function's own job stays exactly
+    what it was: absorb a short in-flight blip without even reaching the
+    persistent layer.
     """
     last_exc: TelegramTransientError | None = None
     for attempt in range(TELEGRAM_SEND_ATTEMPTS):
@@ -205,7 +233,22 @@ async def process_entry(
         result = await _send_with_retries(
             http_client, bot_token=bot_token, chat_id=chat_id, text=text, action_id=action_id
         )
+    except TelegramTransientError as exc:
+        # _send_with_retries already exhausted its own in-process attempts
+        # for this one delivery — only a genuinely transient error (never
+        # confirmed to have reached Telegram) is eligible for the
+        # persistent, cross-cycle retry budget.
+        logger.warning("telegram_relay.send_failed", action_id=str(action_id), reason=str(exc))
+        await _fail_with_retry(customer_id, action_id)
+        return
     except TelegramSendError as exc:
+        # A non-transient rejection (e.g. HTTP 400 "chat not found", or a
+        # ReadTimeout that may already have reached Telegram — see
+        # telegram_client.TelegramTransientError's own docstring) must
+        # NEVER be retried, persistent budget or not: retrying it either
+        # cannot succeed (bad chat_id won't fix itself) or risks a real
+        # duplicate send. Straight to a terminal, notified FAILED, exactly
+        # as before this module had a persistent retry layer at all.
         logger.warning("telegram_relay.send_failed", action_id=str(action_id), reason=str(exc))
         await _resolve(customer_id, action_id, ActionStatus.FAILED)
         return

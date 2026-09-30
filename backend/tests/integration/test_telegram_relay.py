@@ -15,7 +15,7 @@ import json
 import os
 import signal
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -25,6 +25,7 @@ from sqlalchemy import select
 
 from doda.application.action_service import (
     consume_approval,
+    promote_due_retries,
     propose_action,
     request_approval,
     validate_action,
@@ -33,7 +34,9 @@ from doda.config import get_settings
 from doda.db import async_session_factory, tenant_scoped_session
 from doda.domain.action.models import Action, ActionStatus, RiskLevel
 from doda.domain.audit.models import AuditEvent
+from doda.domain.base import utcnow
 from doda.domain.identity.models import ActorKind
+from doda.domain.notification.models import Notification, NotificationType
 from doda.domain.outbox.models import OutboxMessage
 from doda.infrastructure import telegram_relay as telegram_relay_module
 from doda.infrastructure.outbox_relay import relay_once as outbox_relay_once
@@ -475,13 +478,17 @@ async def test_a_transient_failure_that_clears_up_still_succeeds(
     assert action.status is ActionStatus.SUCCEEDED
 
 
-async def test_a_sustained_transient_outage_still_ends_in_a_bounded_failed(
+async def test_a_sustained_transient_outage_within_one_cycle_schedules_a_persistent_retry(
     db_available: bool, redis_client: Redis
 ) -> None:
-    """The other half of the same fix: retries are bounded
-    (TELEGRAM_SEND_ATTEMPTS), not infinite — an outage that never clears
-    up within that budget still ends in a terminal FAILED, exactly as
-    before this fix, rather than hammering Telegram forever."""
+    """FR-ACT-005's persistent half (action_service.record_transient_failure):
+    in-process retries are bounded (TELEGRAM_SEND_ATTEMPTS), but exhausting
+    them no longer means an immediate, notified terminal FAILED — it means
+    the action moves to RETRYING with retry_count incremented and
+    next_retry_at set, waiting for promote_due_retries. No FAILED_ACTION
+    notification fires yet (see apply_transition's notify=False on that
+    intermediate FAILED hop) — only the eventually-terminal FAILED
+    notifies, proven separately below."""
     customer_id, action_id = await _seed_ready_telegram_action()
 
     call_count = 0
@@ -497,7 +504,71 @@ async def test_a_sustained_transient_outage_still_ends_in_a_bounded_failed(
 
     assert call_count == 3  # TELEGRAM_SEND_ATTEMPTS, not unbounded
     action = await _get_action(customer_id, action_id)
+    assert action.status is ActionStatus.RETRYING
+    assert action.retry_count == 1
+    assert action.next_retry_at is not None and action.next_retry_at > utcnow()
+
+    async with tenant_scoped_session(customer_id) as session:
+        pending = (
+            (
+                await session.execute(
+                    select(Notification).where(
+                        Notification.notification_type == NotificationType.FAILED_ACTION
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert pending == []  # not a final failure yet — must not notify
+
+
+async def test_persistent_retries_are_also_bounded_and_the_final_one_notifies(
+    db_available: bool, redis_client: Redis
+) -> None:
+    """The other half: MAX_ACTION_RETRIES bounds the persistent layer too.
+    A sustained outage that never clears, driven through
+    process_entry -> RETRYING -> promote_due_retries -> READY ->
+    process_entry repeatedly, eventually exhausts the budget and lands on
+    a terminal FAILED — with exactly one FAILED_ACTION notification, only
+    on that final transition, not on any of the intermediate retries."""
+    customer_id, action_id = await _seed_ready_telegram_action()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    fields = {b"customer_id": str(customer_id).encode(), b"aggregate_id": str(action_id).encode()}
+    far_future = utcnow() + timedelta(days=1)
+
+    # MAX_ACTION_RETRIES + 1 delivery attempts total: the first exhausts
+    # in-process retries and schedules a persistent retry each time until
+    # the budget itself is exhausted on the final one.
+    for _ in range(4):
+        action = await _get_action(customer_id, action_id)
+        if action.status is ActionStatus.RETRYING:
+            async with tenant_scoped_session(customer_id) as session:
+                await promote_due_retries(session, now=far_future)
+        async with _mock_http_client(handler) as http_client:
+            await process_entry(http_client, fields=fields, bot_token="fake-test-token")
+
+    action = await _get_action(customer_id, action_id)
     assert action.status is ActionStatus.FAILED
+    assert action.retry_count == 3  # MAX_ACTION_RETRIES — exhausted, not incremented further
+
+    async with tenant_scoped_session(customer_id) as session:
+        notifications = (
+            (
+                await session.execute(
+                    select(Notification).where(
+                        Notification.notification_type == NotificationType.FAILED_ACTION,
+                        Notification.reference_id == action_id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(notifications) == 1  # only the final, truly-terminal FAILED notified
 
 
 async def test_a_read_timeout_is_not_retried_even_once(db_available: bool, redis_client: Redis) -> None:
