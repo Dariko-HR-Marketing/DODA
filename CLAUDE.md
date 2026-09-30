@@ -8227,3 +8227,43 @@ schedules_a_persistent_retry` mavjud testni qayta yozib o'rniga o'tdi,
 `test_persistent_retries_are_also_bounded_and_the_final_one_notifies`
 yangi), barchasi real Postgres+Redis'da; `ruff`/`mypy src/doda` toza;
 migratsiya round-trip (0027→0028→0027→0028) qo'lda tekshirildi.
+
+**O'n yettinchi `security-review` o'tkazildi — FR-ACT-005'ning yangi
+persistent-retry diff'iga qarshi (0028-migratsiya, `action_service.py`ning
+`record_transient_failure`/`promote_due_retries`+`notify` parametri,
+`telegram_relay.py`ning except-band bo'linishi, yangi `promote_due_action_
+retries_job.py`).** To'rtta aniq nuqtaga alohida e'tibor berish so'raldi:
+(1) `promote_due_retries`ning tenant izolyatsiyasi — yagona chaqiruvchisi
+(`promote_due_action_retries_job.py`) `fire_due_reminders_job.py`/`verify_
+audit_chain_job.py` bilan bayt-baytiga bir xil shakl (RLS'siz `UserCustomer
+Index` orqali customer_id'larni topib, har biri uchun alohida `tenant_
+scoped_session`) ekani; (2) `notify=False`ning suiiste'mol qilinish
+imkoni — `retry_count`/`next_retry_at` hech qanday API schema yoki
+endpoint orqali ochilmagani, `notify=False`ning yagona chaqiruvchisi
+`record_transient_failure`ning o'z oraliq FAILED→RETRYING bosqichi
+ekani, yakuniy terminal FAILED har doim `notify=True` (standart) bilan
+chaqirilishi; (3) retry-byudjetini chetlab o'tish/race imkoni —
+`apply_transition`ning mavjud `SELECT...FOR UPDATE`+`populate_existing`
+qulfi FAILED→RETRYING ketma-ketligini atomik qilishi, va bir vaqtdagi
+`promote_due_retries` ishga tushirilishlarining ikkinchisi state-machine
+backstop orqali `InvalidActionTransition` bilan rad etilib, ikki marta
+outbox'ga qo'yishning oldi olinishi; (4) outbox qayta-navbatga qo'yish
+to'g'riligi — `customer_id` DB qatoridan (attacker-influenced emas)
+kelishi, `Action.idempotency_key`/`Approval.nonce` bilan aloqasi yo'qligi
+(bu mexanizm ikkalasidan ham mustaqil).
+
+**Natija: 0 topilma** — 4-, 6-, 7-, 9-, 10-, 11-, 13-, 14-, 16-review'lar
+bilan bir xil, chindan ham toza. Rasmiy hisobotga kiritilishi kerak
+bo'lgan, ishonch darajasi >=8 bo'lgan hech qanday nomzod yo'q edi.
+
+572 test, barchasi real Postgres+Redis'da (kod o'zgarmadi — sof
+tekshiruv).
+
+**Eslatma (jarayon, kod emas)**: oldingi commit (`d489ef5`, FR-ACT-005
+persistent retry) stop-hook majburlagani uchun 17-review yakunlanishini
+kutmasdan push qilingan edi va shu sababli kerakli attribution footer
+(`Co-Authored-By`/`Claude-Session`) qatorlarisiz ketdi — bu commit
+allaqachon push qilingan, `--amend`+force-push esa git safety protocol
+bo'yicha aniq so'ralmasdan qilinadigan destructive operatsiya, shuning
+uchun tuzatilmadi. Bu yozuvning o'zi (va undan keyingi barcha commit'lar)
+to'g'ri footer bilan davom etadi.
