@@ -8094,3 +8094,34 @@ talab qiladi.
 
 `docs/risk-register.md`ning RISK-003 qatoriga yangi hujjatga havola
 qo'shildi. Sof hujjatlashtirish — kod o'zgarmadi, 571 test o'zgarishsiz.
+
+**O'n oltinchi `security-review` o'tkazildi — 15-review'dan (FR-AUTH-009
+tuzatishi) KEYINGI, hali ko'rib chiqilmagan ikkita commit'ga qarshi:
+NFR-DATA-001b/c (C4/C3 data-classification skaneri + `ai.gateway_call.v1`
+audit yozuvi) va 6-simplify pass (`propose_action`ning `actor_kind`
+defaultini olib tashlash, tool-call classification/blocked-content
+handler dedup'lari).** Diapazon `git diff 3168716..6c2a5bf` orqali aniq
+belgilandi — bu ikkala commit `b2fa5c0` (FR-KNW citation-gap, sof hujjat)
+oldidan kod jihatidan oxirgi, hali review qilinmagan o'zgarishlar edi.
+
+Topish subagent'iga ayniqsa uchta nozik nuqtaga alohida e'tibor berish
+so'raldi: (1) C4-bloklash HAQIQATDA `stream_message`ning provayder
+chaqiruvidan VA xabarni saqlashdan OLDIN ishga tushishi (faqat
+hisoblab, e'tiborsiz qoldirilmasligi); (2) yangi `ai.gateway_call.v1`
+audit yozuvi haqiqiy `WorkspaceContext`dan (attacker-controllable emas)
+tenant-scoped ekani; (3) `propose_action`ning `actor_kind` defaultini
+olib tashlash HAQIQATDA barcha chaqiruvchilarni majburlashi, va test
+fayllaridagi yangi aniq `actor_kind=ActorKind.HUMAN` qo'shimchalari
+haqiqatan HAR BIRI inson stsenariysi ekani (ko'r-ko'rona mypy'ni
+qondirish uchun SERVICE stsenariysini yashirib qo'ymagani).
+
+**Natija: 0 topilma.** Subagent barcha uchta nuqtani, shu jumladan
+`service_actor_service.py`ning placeholder-hash o'zgarishini (haqiqiy
+autentifikatsiya siri emas, faqat OIDC subject bilan to'qnashmaslik
+uchun noyob kalit — `secrets.token_hex(32)`ga o'tish entropiyani
+kamaytirmaydi, faqat oshiradi) va `_to_out`/`_blocked_content_response`
+dedup'larining hech qanday yangi ma'lumot sizib chiqarmasligini
+alohida tasdiqladi. Bu 4-, 6-, 7-, 9-, 10-, 11-, 13-, 14-review'lar
+bilan bir xil — chindan ham toza natija.
+
+571 test, barchasi real Postgres'da (kod o'zgarmadi — sof tekshiruv).
