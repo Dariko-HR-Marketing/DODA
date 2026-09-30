@@ -673,6 +673,7 @@ docs/
   adr/                # Architecture Decision Records (TRD 6.4, NFR-MNT-001)
   open-decisions.md   # TRD 19.4 — Product Owner tasdig'i shart bo'lgan 8 savol, holati
   risk-register.md    # TRD 19.1 — o'nta riskning har biri, haqiqiy kod bazasiga nisbatan holati
+  assumptions.md       # TRD 8-bo'lim — besh ASM-* taxminning har biri, haqiqiy holatga nisbatan
   design-proposals/   # Qurilmagan, Product Owner qarorini talab qiladigan bo'limlar uchun taklif
                        # hujjatlari (masalan FR-ADM-design-proposal.md)
 ```
@@ -692,3 +693,7 @@ har biri uchun xulosa: qaysi biri mavjud UI bilan allaqachon
 qondirilgan, qaysi biri kichik qadam bilan yopilgan (FR-ADM-005,
 AI byudjeti limitlarini belgilash), va qaysi biri hali haqiqiy
 Product Owner/arxitektura qarorini kutmoqda (FR-ADM-002/003/004).
+`docs/assumptions.md` — TRD 8-bo'limining besh ASM-* taxminining har
+biri (masalan "birinchi connector OAuth ishlatadi") haqiqiy kod
+bazasiga nisbatan hali to'g'rimi, taxmindan farqli chiqqan bo'lsa
+ham bashorat qilingan oqibat real bo'lganmi.

@@ -8267,3 +8267,60 @@ allaqachon push qilingan, `--amend`+force-push esa git safety protocol
 bo'yicha aniq so'ralmasdan qilinadigan destructive operatsiya, shuning
 uchun tuzatilmadi. Bu yozuvning o'zi (va undan keyingi barcha commit'lar)
 to'g'ri footer bilan davom etadi.
+
+**To'rtinchi to'liq TRD-ID sweep o'tkazildi (yana dasturiy, xotiradan
+emas — `pandoc` orqali barcha 124 ID chiqarib, CLAUDE.md+`docs/**/*.md`
+bo'ylab grep qilib) — bu safar `ASM-002/003/004` hech qayerda ID bo'yicha
+keltirilmagani topildi.** `ASM-001` CLAUDE.md'ning o'z kirish qismida
+("Jamoa" bo'limi) allaqachon muhokama qilingan edi, lekin `ASM-*`
+qatorining qolgan to'rttasi — TRD 8-bo'limining o'z "Taxminlar va tashqi
+bog'liqliklar" jadvali, har biri "agar noto'g'ri chiqsa — X oqibat" bilan
+— hech qachon ID bo'yicha tekshirilmagan edi.
+
+Yangi `docs/assumptions.md` — `open-decisions.md`/`risk-register.md`
+bilan bir xil formatdagi tracker, lekin Product Owner qaroriga emas,
+loyihaning o'z TAXMINLARIGA qaratilgan. Har bir ASM-* haqiqiy holatga
+solishtirildi:
+- **ASM-001** (4.5-5 FTE jamoa) — boshidanoq ataylab qayta talqin
+  qilingan (haqiqiy jamoa yo'q, bitta AI agent + PO).
+- **ASM-002** (tanlangan AI provider barqaror) — HOLDS, va bashorat
+  qilingan oqibat (fallback provider) ADR-009'da allaqachon, ehtiyot
+  chorasi sifatida oldindan qurilgan.
+- **ASM-003** (birinchi connector OAuth ishlatadi) — **taxminning o'zi
+  noto'g'ri chiqdi** (Telegram Bot API oddiy bot token ishlatadi, OAuth
+  emas), lekin bashorat qilingan oqibat ("S7 uzayadi") sodir bo'lmadi —
+  bot-token modeli OAuth'dan SODDAROQ chiqib, connector S7'gacha
+  kutmasdan qurildi. Bu haqiqiy, foydali topilma: TRD'ning o'z
+  taxmini xato bo'lgan holatlar ham "falsified, lekin zararsiz" bo'lishi
+  mumkin — har doim yomon oqibat bermaydi.
+- **ASM-004** (MVP bitta tashkilot uchun, SaaS emas) — OD-001'ning o'zi
+  buni ochiq ravishda bekor qiladi (Customer→Workspace→Membership
+  boshidanoq multi-tenant). Bashorat qilingan oqibatning ikkala qismi
+  (billing, self-serve onboarding) ataylab hali qurilmagan — bu yangi
+  bo'shliq emas, TRD 2.3'ning o'zi self-serve signup'ni v1 uchun OUT OF
+  SCOPE deb belgilagani va real pulli mijoz yo'qligining tabiiy natijasi.
+- **ASM-005** (hosting managed Postgres/storage taklif qiladi) — HOLDS
+  bugungi Render.com production sirti uchun, lekin OD-005'ning hali
+  talab qilinmagan VPS/Hetzner yo'nalishi (`docker-compose.prod.yml`)
+  self-managed Postgres'ga o'tishni nazarda tutadi — agar loyiha shu
+  yo'nalishga o'tsa, bashorat qilingan oqibat (SRE yuklamasi ikki
+  baravar) haqiqiy bo'lib qolishi mumkin, hozircha materiallashmagan
+  xavf sifatida qayd etildi.
+
+README.md'ga havola qo'shildi (`docs/`-daraxti va "Arxitektura qarorlari
+va ochiq savollar" bo'limi). Sof hujjatlashtirish — kod o'zgarmadi, 572
+test o'zgarishsiz (real Postgres+Redis'ga qarshi qayta tasdiqlandi,
+muhit qayta ishga tushirilgandan keyin); `ruff format`/`ruff check`/
+`mypy src/doda` va frontend `tsc --noEmit`/ESLint ham qayta tekshirilib
+toza ekani tasdiqlandi.
+
+**Eslatma (jarayon, kod emas)**: shu tekshiruv jarayonida GitHub Actions
+CI holati ham tekshirildi — HEAD (`57a8ca4`) uchun hech qanday CI ishga
+tushmagan, sababi aniq: workflow faqat push/PR hodisalari bilan
+ishga tushadi va bu branch uchun hech qanday ochiq PR yo'q (PR ataylab
+so'ralmasdan yaratilmaydi — mavjud qoida). Bu xato emas, faqat kuzatuv:
+har bir commit shu sessiyaning o'zida mahalliy ravishda CI'ning barcha
+tekshiruvlarini (lint/format/mypy/testlar) real Postgres+Redis'ga qarshi
+takrorlab tasdiqlaydi, shuning uchun amaliy qamrov saqlanadi, lekin GitHub
+UI'sida "yashil check" ko'rinmaydi — PR ochilganda birinchi push CI'ni
+avtomatik ishga tushiradi.
