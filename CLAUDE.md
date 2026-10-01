@@ -8743,3 +8743,53 @@ push'dan oldin).
 
 `api/auth.py`: 96%→100%. 586 test, barchasi real Postgres'da; `ruff`/`mypy`
 toza.
+
+**NFR-SEC-003 (dependency audit) — real `pip-audit`/`npm audit` qayta
+ishga tushirilganda haqiqiy, CRITICAL darajadagi topilma chiqdi va
+tuzatildi: `next` 16.3.4 — Remote Code Execution (`next/og`
+`ImageResponse`, GHSA-vcvr-r3jv-pc5j, CVSS critical, ta'sir diapazoni
+16.2.0–16.3.5).** Bu rutin sog'liq tekshiruvi (har safar "hamma narsa
+toza" deb o'tkazib yubormaslik) jarayonida topildi, soxtalashtirilmagan.
+
+Frontend bu kod bazasida `next/og`ni hech qayerda ishlatmaydi
+(`grep -rn "next/og\|ImageResponse" src/` — 0 natija), lekin bu haqiqiy,
+patch qilingan versiya mavjud (16.3.8) bo'lgan CRITICAL CVE'ni e'tiborsiz
+qoldirish uchun sabab emas — "bugun ishlatilmayapti" hali "hech qachon
+yetib bo'lmaydi" degani emas, va NFR-SEC-003'ning o'zi bu toifadagi
+topilmani e'tiborsiz qoldirishni oqlamaydi. `pip-audit` ham bitta,
+past-xavfli topilma berdi (`urllib3` 2.7.0, uchta CVE — ikkitasi DoS,
+bittasi faqat HTTPS forwarding proxy ishlatilganda ta'sir qiladigan TLS
+konfiguratsiya xatosi, DODA hech qachon forwarding proxy ishlatmaydi) —
+lekin bu `pyproject.toml`da hech qanday pin orqali majburlanmagan
+(`google-genai`'ning transitive `requests`→`urllib3` zanjiri orqali
+kelgan, mening uzoq umr ko'rgan venv'imning eskirganligi, repo'ning o'zi
+emas) — `pip install --upgrade urllib3` bilan mahalliy tozalandi, lekin
+repo'da hech narsa o'zgarishi shart emas edi (freshCI install har doim
+yangi versiyani tortib oladi).
+
+`next`ning o'zi esa `package.json`da ANIQ versiyaga pin qilingan
+(`"next": "16.3.4"`, caret yo'q) — demak bu CI'ning keyingi `npm ci`
+chaqiruvida ham o'zi tuzalmaydi, repo'ning o'zida tuzatish shart edi.
+`npm install next@16.3.8` bilan yangilandi, `eslint-config-next` ham
+(Next.js'ning o'z konventsiyasi — ESLint konfiguratsiya paketi Next'ning
+o'zi bilan bir xil versiyada yurishi kerak) birga 16.3.8'ga ko'tarildi,
+ikkalasi ham `react`/`react-dom` bilan bir xil "aniq versiya, caret yo'q"
+uslubida pin qilindi (avvalgi `^16.3.8` qoralamasi ataylab aniq pin'ga
+almashtirildi — bu kod bazasida boshqa frontend bog'liqliklar ham shu
+intizomga rioya qiladi).
+
+`npm audit fix` qolgan yagona (past, DoS, dev-only `@typescript-eslint`
+transitive `brace-expansion`) topilmani ham muvaffaqiyatli, breaking-emas
+tuzatish bilan yopdi — `npm audit`: **0 ta topilma**.
+
+Haqiqiyligi to'liq, real backend+frontend bilan tasdiqlandi — faqat
+`npm run build`/`tsc`/`eslint` emas: backend (uvicorn) va frontend
+(`next start`, 16.3.8 bilan qurilgan production build) real ishga
+tushirilib, barcha 11 mustaqil E2E seed prefiksi bilan urug'lantirilib,
+**barcha 17 E2E spec** (shu jumladan accessibility skaneri) qayta ishga
+tushirilib yashil ekani tasdiqlandi — bu versiya ko'tarishning o'zi
+hech qanday runtime regressiya keltirmaganini isbotlaydi, shunchaki
+"build o'tdi" emas.
+
+Backend o'zgarmadi (586 test, o'zgarishsiz). `ruff`/`mypy`/ESLint/`tsc`
+barchasi toza.
