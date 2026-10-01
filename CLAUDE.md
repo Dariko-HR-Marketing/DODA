@@ -8505,3 +8505,38 @@ result`, `_resolve_attachment` — barchasi xuddi shunday ikki-uch chaqiruv
 nuqtali takrorlanishni yopgan edi).
 
 579 test o'zgarishsiz (sof refaktor); `ruff`/`mypy src/doda` toza.
+
+**O'n sakkizinchi `security-review` o'tkazildi — 17-review'dan (`d489ef5`)
+keyingi hamma narsaga qarshi (ASM hujjat yozuvi, ikkita bug-fix commit —
+`seed_e2e_demo.py`'ning `actor_kind` regressiyasi va chat'ning stale-
+response race'i, coverage-gap yopilishi, 7-simplify pass).** Diapazon
+kichik (`git diff --stat`: 11 fayl, ko'pchiligi test/hujjat) va faqat
+UCHTA haqiqiy production-kod fayli o'zgargan — har biri allaqachon
+o'zining alohida audit-zanjiri uslubidagi isboti bilan tasdiqlangan edi,
+shuning uchun 13-/14-review'lardagi kabi to'liq 3-bosqichli subagent
+jarayoni o'rniga to'g'ridan-to'g'ri o'qib chiqildi:
+
+1. `backend/scripts/seed_e2e_demo.py` — ops-skript (API sirtiga ochiq
+   emas), yangi majburiy `actor_kind=ActorKind.HUMAN` kalit-so'zini
+   qo'shadi. Xavfsizlik ta'siri yo'q.
+2. `telegram_relay.py` — sof refaktor (`_loaded_action` context manager
+   chiqarilishi), ikkala chaqiruv nuqtasining xulqi bayt-baytiga
+   o'zgarmagan (`assert action is not None` semantikasi saqlangan).
+3. `frontend/.../chat/page.tsx` — mijoz tomonidagi stale-response
+   himoyasi (monotonik `messagesRequestIdRef`), faqat ko'rsatish
+   to'g'riligi — hech qanday authz yoki ma'lumot chegarasi o'zgarmadi
+   (ma'lumotning o'zi allaqachon autentifikatsiyalangan sessiya orqali
+   scope qilingan edi, faqat QAYSI javob oynada ko'rsatilishi tuzatildi).
+
+**Natija: 0 topilma** — 4-, 6-, 7-, 9-, 10-, 11-, 13-, 14-, 16-review'lar
+bilan bir xil.
+
+Shu bilan birga to'liq sog'liq tekshiruvi o'tkazildi: beshinchi marta
+to'liq TRD-ID sweep (barcha 124 ID CLAUDE.md+`docs/**/*.md`da — bu safar
+HAMMASI topildi, yangi sitatsiya bo'shlig'i yo'q — avvalgi to'rtta
+sweep'ning o'zi to'liq yopganini tasdiqlaydi), `.env`dagi mavjud
+credential'lar ro'yxati qayta tekshirildi (yangi hech narsa kelmagan —
+OD-004'ning GCP STT/TTS kaliti hamon kutilmoqda), va `docker ps`/`boto3`
+hamon avvalgidek bloklangan (S3 adapter uchun, FR-KNW-001'ning o'z
+cheklovi o'zgarishsiz). 579 test, `ruff format`/`ruff check`/`mypy
+src/doda` va frontend `tsc --noEmit`/ESLint — barchasi toza.
