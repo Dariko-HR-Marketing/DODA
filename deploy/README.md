@@ -258,6 +258,38 @@ in this file) — if Render's external connection string needs an explicit
 `postgresql+asyncpg://` rewrite doesn't already handle, the workflow's
 first real run will say so plainly in its logs.
 
+## Uptime monitoring (NFR-REL-001)
+
+`.github/workflows/uptime-check.yml` pings the production health endpoint
+every ~10 minutes (retrying for about a minute to tolerate Render's own
+documented free-tier cold start, not just failing on the first miss), and
+`.github/workflows/uptime-monthly-report.yml` summarizes the last 30 days
+of those runs into a Job Summary once a month — the two halves of
+NFR-REL-001's own acceptance criterion ("Uptime monitoring, oylik
+hisobot").
+
+**To enable it**: add a repository **variable** (not a secret — a health
+URL isn't sensitive) named `DODA_PROD_HEALTH_URL` (Settings → Secrets and
+variables → Actions → Variables tab) holding the full health endpoint,
+e.g. `https://doda-backend-jv8e.onrender.com/v1/healthz` for the current
+Render MVP. Deliberately a variable rather than hardcoded in the
+workflow: this exact hostname has already changed once due to Render's
+own suffix-assignment behavior (see the "first attempt" note above), and
+a variable lets that be updated without touching code. Until it's set,
+every scheduled run is a clean, logged no-op, same posture as the ops
+jobs above.
+
+**Honest limits**: this is a ~10-minute-interval sample, not continuous
+monitoring — a short outage between two checks could be missed. The
+monthly "report" is a GitHub Actions Job Summary (computed from the
+run history GitHub already retains, via the default `GITHUB_TOKEN` —
+no new secret, no external storage), not a dedicated dashboard; that
+distinction matters because NFR-REL-002 (a stricter, separate
+requirement — error budget tracking with an automatic feature freeze
+once it's spent) is NOT what this closes and was not attempted here.
+Not verified against a live Render deployment from here, same
+network-policy block as everything else Render-specific in this file.
+
 ## Honest gaps this deployment shape does not close
 
 - No automated backup of the `doda_postgres_data` volume — a real

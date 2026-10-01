@@ -8959,3 +8959,74 @@ ENDI darhol (kuzatuvchiga yetib borguncha necha kun emas) ko'rsatadi.
 yoqib yuborgani esa — bu workflow qurilishidan oldin FR-TASK-005ning
 "yoqish" yarmi haqiqatda hech qachon avtomatik ishlamaganining
 to'g'ridan-to'g'ri, sintetik bo'lmagan dalili.
+
+**NFR-REL-001 ("Availability: MVP target 99.5%, graceful degradation" —
+tekshiruv: "Uptime monitoring, oylik hisobot") — ilgari NFR-REL-002 bilan
+birga "bloklangan" deb umumlashtirilgan edi, lekin bu ikkisi aslida farqli
+va NFR-REL-001'ning o'zi ops-jobs.yml bilan aynan bir xil usulda
+qurilishi mumkin ekani aniqlandi.** TRD'ning o'z jadvalini (pandoc orqali,
+xotiradan emas) qayta o'qib chiqishda farq aniq ko'rindi: NFR-REL-002
+("Oyiga 3.6 soat; sarflansa feature freeze — SRE dashboard") haqiqatda
+yangi, murakkab infratuzilma (byudjet hisoblash, avtomatik feature-freeze
+siyosati) talab qiladi va bloklangan bo'lib qoladi; NFR-REL-001ning o'z
+tekshiruvi esa — "Uptime monitoring, oylik hisobot" — aynan
+`verify_audit_chain_job.py`/`ops-jobs.yml` qurilishida ishlatilgan
+mantiqning o'zi: hech qanday yangi mahsulot qarori emas, faqat GitHub
+Actions'ning cheksiz tashqi tarmoq huquqidan (bu sandbox'ning o'zi
+render.com'ni butunlay bloklaydi) foydalanadigan ikkita scheduled
+workflow.
+
+`.github/workflows/uptime-check.yml` — har ~10 daqiqada production health
+endpoint'ini (`/v1/healthz`, autentifikatsiyasiz, DB'ga bog'liq emas)
+ping qiladi, Render'ning o'z hujjatlashtirilgan bepul-reja xulqini
+("~50s cold start") hisobga olib, birinchi urinishda emas, ~60 soniya
+davomida (6 marta, 10s oraliqda) qayta urinadi — bu `deploy/README.md`da
+allaqachon hujjatlashtirilgan, frontend'ning o'z post-login retry tuzatishi
+bilan bir xil tolerantlik. Faqat shu oyna tugagandan keyin ham javob
+kelmasa — bu HAQIQIY to'xtash, oddiy cold start emas — job qizil bo'ladi.
+
+`.github/workflows/uptime-monthly-report.yml` — oyiga bir marta (1-sanada)
+`gh run list` orqali (standart `GITHUB_TOKEN`, yangi secret shart emas)
+`uptime-check.yml`ning oxirgi 30 kunlik ishga tushirish tarixini o'qib,
+muvaffaqiyat foizini hisoblab, Job Summary'ga yozadi — bu NFR-REL-001'ning
+o'z "oylik hisobot" talabining halol, yangi infratuzilma qurmasdan
+bajarilishi: GitHub allaqachon saqlab turgan ma'lumotdan foydalaniladi,
+yangi baza yoki saqlash joyi ixtiro qilinmadi.
+
+**Ataylab inert-by-design, ops-jobs.yml bilan bir xil naqsh**:
+`DODA_PROD_HEALTH_URL` — bu safar **secret emas, repository VARIABLE**
+(health URL sezgir emas) — hali mavjud emas. Ataylab kodga qattiq
+yozilmagan: `render.yaml`ning o'z izohi Render'ning bu Blueprint'ning
+xizmatlariga allaqachon IKKI MARTA tasodifiy suffiks bilan nom berganini
+hujjatlashtiradi (yuqoriga qarang, "Birinchi Render Blueprint sinovi") —
+URL'ni kodga qattiq yozish xuddi shu sababdan kelajakda jimgina eskirib
+qolardi; variable Product Owner'ga kod o'zgarishisiz yangilash imkonini
+beradi.
+
+**Halol chegaralar, aniq yozilgan**: bu ~10 daqiqalik namuna, uzluksiz
+monitoring emas — ikki tekshiruv orasidagi qisqa to'xtash ko'rinmasligi
+mumkin. "Hisobot" — GitHub Actions Job Summary, alohida dashboard emas
+(bu NFR-REL-002'ning o'z, ancha qattiqroq talabi — byudjet+avtomatik
+feature-freeze — bu safar QURILMADI, bloklangan bo'lib qoladi). "Graceful
+degradation" (NFR-REL-001'ning sifat jihatidan o'lchab bo'lmaydigan
+qismi) uchun yangi kod yozilmadi — bu allaqachon mavjud, alohida
+qurilgan va hujjatlashtirilgan xususiyatlarning yig'indisi orqali
+ta'minlanadi: `NullModelGateway`ning aniq "AI provayder hali
+tanlanmagan" xabari (soxta javob o'rniga), AI byudjeti soft-cap
+ogohlantirishi, kill switch, va frontend'ning Render cold-start uchun
+qurilgan qayta urinish/kutish UI'si — bularning hech biri yangidan
+qurilmadi, faqat shu talab bilan bog'lab ko'rsatildi. Render'ga qarshi
+tasdiqlanmagan — boshqa har bir Render-bog'liq hujjat kabi, tarmoq
+siyosati bloklaydi.
+
+`docs/risk-register.md`da/traceability yozuvida NFR-REL-\* endi ikkiga
+ajratilgan holda ko'rinadi: NFR-REL-001 qurilgan, NFR-REL-002 hamon
+bloklangan — avvalgi "ikkalasi ham bloklangan" umumlashtirish endi
+noto'g'ri bo'lib qolgani uchun aniqlashtirildi.
+
+Kod o'zgarmadi (backend'ga hech narsa tegilmadi) — 586 test o'zgarishsiz.
+YAML ikkalasi ham `python3 -c "import yaml; yaml.safe_load(...)"` bilan
+sintaktik jihatdan tasdiqlandi; `jq`/foiz hisoblash mantig'i qo'lda,
+sintetik `gh run list` JSON namunasi bilan (4 ta yozuv, 3 muvaffaqiyatli)
+tasdiqlanib, `75.00%` to'g'ri chiqishi ko'rsatildi; `bash -n` ikkala
+skriptning sintaksisini tasdiqladi.
