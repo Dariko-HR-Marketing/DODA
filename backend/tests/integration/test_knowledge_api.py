@@ -103,6 +103,41 @@ async def test_member_can_upload_list_get_and_download_a_document(
     assert download.headers["content-type"] == "application/pdf"
 
 
+async def test_downloading_a_document_whose_stored_object_went_missing_is_a_clean_404(
+    client: AsyncClient, db_available: bool, storage_settings: Settings, tmp_path
+) -> None:
+    """The DB row surviving while the stored object does not (a crash
+    between delete_document's two steps, or manual storage tampering) is
+    a distinct, documented failure mode in download_document — simulated
+    here by wiping storage out from under an otherwise-valid upload."""
+    member = await seed_workspace_member()
+    upload = await client.post(
+        f"/v1/workspaces/{member.workspace_id}/documents",
+        files=_upload_files("report.pdf", "application/pdf", _REAL_PDF_BYTES),
+        headers=_auth_headers(member.session_id),
+    )
+    assert upload.status_code == 200
+    document_id = upload.json()["id"]
+
+    for stored_file in tmp_path.rglob("*"):
+        if stored_file.is_file():
+            stored_file.unlink()
+
+    # The row is still there (GET still 200s) — only the content is gone.
+    get_one = await client.get(
+        f"/v1/workspaces/{member.workspace_id}/documents/{document_id}",
+        headers=_auth_headers(member.session_id),
+    )
+    assert get_one.status_code == 200
+
+    download = await client.get(
+        f"/v1/workspaces/{member.workspace_id}/documents/{document_id}/content",
+        headers=_auth_headers(member.session_id),
+    )
+    assert download.status_code == 404
+    assert download.json()["detail"] == "document content not found"
+
+
 async def test_a_malicious_file_disguised_as_a_pdf_is_rejected_and_never_stored(
     client: AsyncClient, db_available: bool, storage_settings: Settings
 ) -> None:

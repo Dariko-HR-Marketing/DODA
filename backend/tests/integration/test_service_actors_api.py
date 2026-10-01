@@ -117,6 +117,54 @@ async def test_revoked_credential_can_no_longer_authenticate(client: AsyncClient
     assert response.status_code == 401
 
 
+async def test_revoking_an_unknown_credential_id_is_404(client: AsyncClient, db_available: bool) -> None:
+    owner = await seed_workspace_member(customer_role="customer_owner")
+    response = await client.delete(
+        f"/v1/customers/{owner.customer_id}/service-actors/{uuid.uuid4()}",
+        headers=_auth_headers(owner.session_id),
+    )
+    assert response.status_code == 404
+
+
+async def test_revoking_an_already_revoked_credential_is_an_idempotent_no_op(
+    client: AsyncClient, db_available: bool
+) -> None:
+    owner = await seed_workspace_member(customer_role="customer_owner")
+    created = await _create_credential(client, owner)
+
+    first = await client.delete(
+        f"/v1/customers/{owner.customer_id}/service-actors/{created['id']}",
+        headers=_auth_headers(owner.session_id),
+    )
+    assert first.status_code == 204
+
+    # Revoking it a second time is a no-op, not a 404 or a crash — mirrors
+    # session_service.revoke_session's own idempotent stance.
+    second = await client.delete(
+        f"/v1/customers/{owner.customer_id}/service-actors/{created['id']}",
+        headers=_auth_headers(owner.session_id),
+    )
+    assert second.status_code == 204
+
+
+async def test_a_customers_owner_cannot_revoke_another_customers_credential(
+    client: AsyncClient, db_available: bool
+) -> None:
+    owner_a = await seed_workspace_member(customer_role="customer_owner")
+    created = await _create_credential(client, owner_a)
+    owner_b = await seed_workspace_member(customer_role="customer_owner")
+
+    response = await client.delete(
+        f"/v1/customers/{owner_b.customer_id}/service-actors/{created['id']}",
+        headers=_auth_headers(owner_b.session_id),
+    )
+    assert response.status_code == 404
+
+    # Still usable — the mismatched request never touched it.
+    session_id = await _authenticate(client, created["secret"])
+    assert session_id != owner_a.session_id
+
+
 async def test_service_actor_may_propose_an_auto_approved_action_but_not_a_high_risk_one(
     client: AsyncClient, db_available: bool
 ) -> None:

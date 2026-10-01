@@ -133,7 +133,25 @@ def test_a_binary_blob_renamed_to_txt_is_rejected() -> None:
         )
 
 
-@pytest.mark.parametrize("filename", ["../../etc/passwd.pdf", "a/b.pdf", "a\\b.pdf", "", "a" * 300 + ".pdf"])
+def test_a_corrupted_or_truncated_upload_with_the_right_extension_is_rejected() -> None:
+    """FileContentMismatchError's own docstring claims it catches "a
+    renamed executable OR a truncated/corrupted upload" — the renamed-
+    executable half is covered above, but garbage bytes that are also not
+    one of the recognized executable signatures (so they fall through to
+    the plain magic-byte mismatch branch, not the executable-signature
+    one) had never been exercised."""
+    with pytest.raises(FileContentMismatchError):
+        validate_file(
+            filename="report.pdf",
+            declared_content_type="application/pdf",
+            data=b"not actually a pdf, just garbage bytes",
+            max_size_bytes=1_000_000,
+        )
+
+
+@pytest.mark.parametrize(
+    "filename", ["../../etc/passwd.pdf", "a/b.pdf", "a\\b.pdf", "", "a" * 300 + ".pdf", "a\x00b.pdf"]
+)
 def test_a_suspicious_or_malformed_filename_is_rejected(filename: str) -> None:
     with pytest.raises(InvalidFilenameError):
         sanitize_filename(filename)

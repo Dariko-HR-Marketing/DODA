@@ -8413,3 +8413,73 @@ production build muvaffaqiyatli; barcha 17 E2E spec (16 mavjud + yangi
 race-condition regressiya testi) real backend+frontend'ga (production
 build, barcha 10 mustaqil seed prefiksi bilan) qarshi yashil, jumladan
 accessibility skaneri (0 serious/critical WCAG buzilishi).
+
+**Coverage qayta o'lchandi — oxirgi o'lchovdan (485 test) beri qo'shilgan
+katta hajmdagi kod (FR-AUTH-007/009, FR-ACT-009, FR-KNW-001, FR-ADM-005/006,
+NFR-COST-001 breakdown, NFR-DATA-001b/c, FR-ACT-005 persistent retry)
+hech qachon coverage nuqtai nazaridan ko'rib chiqilmagan edi — va bu
+safar ham xuddi avvalgi coverage raundlari kabi haqiqiy, ilgari ko'rinmagan
+bo'shliqlarni ochib berdi.** To'rtta fayl 100%dan past edi, barchasi
+yangi qo'shilgan va hali hech qachon shu nuqtai nazardan tekshirilmagan:
+
+1. **`ai_budget_service.set_customer_ai_budget_override`ning concurrency-
+   recovery filiali (`begin_nested`/`IntegrityError`, 11 qator) hech qachon
+   majburlangan interleaving bilan sinalmagan edi** — bu aynan shu kod
+   bazasida besh marta takrorlangan TOCTOU naqshining (kill switch engage,
+   notification preference, va h.k.) oltinchi nusxasi, lekin FR-ADM-005
+   qurilgandan beri hech qachon "ikkita bir vaqtdagi birinchi-marta
+   override" stsenariysi bilan tekshirilmagan edi. Audit-zanjiri uslubida
+   isbotlandi: `begin_nested()`ni vaqtincha olib tashlab (xom insert+flush
+   bilan almashtirib), `test_two_concurrent_first_time_overrides_for_the_
+   same_customer_both_succeed` (`test_ai_budget_override_concurrency.py`,
+   `two_racing_sessions`/`commit_and_return` yordamchilaridan foydalanib)
+   aynan kutilgan tarzda — bu safar oddiy `IntegrityError` emas, balki
+   `InvalidRequestError: Can't operate on closed transaction` bilan,
+   chunki SAVEPOINT izolyatsiyasisiz xom IntegrityError butun sessiya
+   tranzaksiyasini zaharlab qo'yadi — muvaffaqiyatsiz bo'lishini
+   ko'rsatdim, keyin `begin_nested()`ni qaytarib (`git diff` bilan 0 farq
+   tasdiqlab) yashil ekanini ko'rsatdim.
+2. **`service_actor_service.revoke_service_actor_credential`ning ikkala
+   DENY/no-op filiali (`record is None` → 404, `already revoked` →
+   idempotent no-op) hech qachon test qilinmagan edi** — FR-AUTH-009
+   qurilgandan beri bu fayl birinchi marta coverage nuqtai nazaridan
+   ko'rib chiqildi. Uchta yangi HTTP test qo'shildi
+   (`test_service_actors_api.py`): noma'lum credential_id → 404; allaqachon
+   revoke qilingan credential'ni qayta revoke qilish → 204 (xato emas,
+   `session_service.revoke_session`ning o'zi bilan bir xil idempotent
+   pozitsiya); va boshqa customer'ning kredensialini revoke qilishga
+   urinish → 404 (per-record tenancy tekshiruvi, `test_cross_workspace_
+   record_access.py`ning o'zi o'rnatgan naqshning takrori — mos kelmagan
+   so'rov kredensialga umuman tegmasligi, u hamon haqiqiy ekanligi bilan
+   tasdiqlandi).
+3. **`api/knowledge.py`ning `download_document`idagi "DB qatori bor, lekin
+   storage obyekti yo'q" 404 filiali (`ObjectNotFoundError` → 404,
+   o'zining docstring'ida "crash o'rtasida yoki qo'lda storage buzilishi"
+   deb tasvirlangan holat) hech qachon sinalmagan edi.** Yangi
+   `test_downloading_a_document_whose_stored_object_went_missing_is_a_
+   clean_404` haqiqiy yuklangan fayldan keyin storage papkasidagi fayllarni
+   to'g'ridan-to'g'ri o'chirib (DB qatorini tegmasdan) bu stsenariyni
+   simulyatsiya qiladi — GET (metadata) hamon 200 qaytarishini, faqat
+   content-download 404 qaytarishini tasdiqlaydi.
+4. **`domain/knowledge/file_validation.py`da ikkita filial hech qachon
+   sinalmagan edi.** `FileContentMismatchError`ning o'z docstring'i "bu
+   almashtirilgan executable YOKI buzilgan/kesilgan yuklamani ushlaydi"
+   deydi — lekin mavjud testlarning barchasi faqat birinchi yarmini
+   (executable imzosi bilan) sinagan edi; "buzilgan/kesilgan yuklama"
+   (deklaratsiya qilingan magic-byte bilan mos kelmaydigan, lekin
+   executable ham bo'lmagan xom axlat) yarmi hech qachon tekshirilmagan
+   edi — `test_a_corrupted_or_truncated_upload_with_the_right_extension_
+   is_rejected` bilan yopildi. Ikkinchisi — `sanitize_filename`ning NUL-
+   bayt tekshiruvi (`"\x00" in filename`) — mavjud parametrlashtirilgan
+   testga yangi holat sifatida qo'shildi.
+
+`ai_budget_service.py`/`service_actor_service.py`/`api/knowledge.py`/
+`api/service_actors.py`/`domain/knowledge/file_validation.py`: barchasi
+100%ga yetdi. Qolgan 48 qator (49dan) barchasi allaqachon avvalgi
+sessiyalarda hujjatlashtirilgan, ataylab qoldirilgan sabablar bilan bir
+xil (uchta provider gateway adapteri — real tarmoq murojaatiga bog'liq;
+`authz_service.py`ning strukturaviy yetib bo'lmas DENY filiallari;
+`if __name__ == "__main__"` qatorlari; va h.k.) — yangi hech narsa yo'q.
+
+579 test, barchasi real Postgres(+Redis)'da; `ruff`/`mypy src/doda` toza;
+umumiy backend qamrov 99%.
