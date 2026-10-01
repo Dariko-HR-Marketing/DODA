@@ -222,6 +222,42 @@ request to `$DODA_DOMAIN` over port 80/443 — both need to be open on the
 server's firewall, and DNS needs to already resolve there for the ACME
 challenge to succeed.
 
+## Scheduled ops jobs (FR-TASK-005 / FR-ACT-005 / FR-AUD-004 / FR-ACT-009 / NFR-OBS-001)
+
+`backend/scripts/*_job.py` (plus the two stuck-action detectors) are real,
+tested application logic, but **nothing runs them on a schedule in either
+deployment shape above** — `docker-compose.prod.yml` has no cron-like
+service, and Render's free tier has no Cron Jobs feature. Two of these are
+not optional observability — they are the only thing that ever executes
+already-shipped behavior outside a dev/test session: `fire_due_reminders_
+job.py` is what turns a confirmed, due reminder into a real notification
+(FR-TASK-005), and `promote_due_action_retries_job.py` is what promotes a
+RETRYING action back to READY once its backoff elapses (FR-ACT-005).
+Without a scheduler, both exist fully built and tested but never actually
+fire against real data.
+
+`.github/workflows/ops-jobs.yml` is that scheduler — a GitHub Actions
+workflow (every 15 minutes for the two functional jobs above, daily for
+`verify_audit_chain_job.py`/the stuck-action detectors/
+`verify_trace_completeness_job.py`) that runs regardless of which
+deployment shape is live, since it only needs a reachable Postgres
+connection string, not access to whatever host the app itself runs on.
+**To enable it**: add a repository secret named `DODA_PROD_DATABASE_URL`
+(Settings → Secrets and variables → Actions) holding the production
+database's connection string — for the Render MVP, that is `doda-postgres`'s
+**External Database URL** from its own page in Render's dashboard (the
+*internal* one Render hands `doda-backend` via `fromDatabase:` in
+`render.yaml` is only reachable from inside Render's own network, not from
+a GitHub Actions runner). Until that secret exists, every scheduled run is
+a deliberate, clearly-logged no-op rather than a failing check — same
+"wait for a credential, never fabricate one" posture as the Telegram/
+Google OAuth secrets before they arrived. Not verified against a real
+Render Postgres from here (same network-policy block as everywhere else
+in this file) — if Render's external connection string needs an explicit
+`?sslmode=require` or similar that `config.py`'s own `postgres://` →
+`postgresql+asyncpg://` rewrite doesn't already handle, the workflow's
+first real run will say so plainly in its logs.
+
 ## Honest gaps this deployment shape does not close
 
 - No automated backup of the `doda_postgres_data` volume — a real

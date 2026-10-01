@@ -8851,3 +8851,111 @@ sezgir ma'lumot (client_secret) chat matniga yoki logga chiqarilmadi —
 `.env`dan to'g'ridan-to'g'ri `curl`ga bitta so'rovda uzatildi, natija
 faqat Google'ning o'z xato kodi (sezgir emas). Kod o'zgarmadi — bu sof
 muhit/konfiguratsiya tekshiruvi (586 test, o'zgarishsiz).
+
+**Yangi, real va katta bo'shliq topildi va yopildi: oltita mustaqil
+"ops" skripti (`verify_audit_chain_job.py`, `find_stuck_running_
+actions.py`, `find_stuck_compensating_actions.py`, `fire_due_reminders_
+job.py`, `promote_due_action_retries_job.py`, `verify_trace_completeness_
+job.py`) — barchasi haqiqiy, testlangan kod — hech qachon, hech qanday
+deploy shaklida (na `docker-compose.prod.yml`, na Render) avtomatik
+ishga tushmagan.** Har birining o'z docstring'i aniq "cron/systemd
+timer ostida ishga tushirish uchun yozilgan" deydi, lekin bu loyihada
+hech qachon bunday wrapper haqiqatda qurilmagan edi — faqat qo'lda,
+tekshirish uchun ishga tushirilgan.
+
+Bu ikkitasidan ikkitasi FAQAT kuzatuv emas: `fire_due_reminders_job.py`
+FR-TASK-005'ning o'zi — tasdiqlangan, muddati kelgan reminder'ni
+haqiqiy `REMINDER_DUE` bildirishnomasiga aylantiradigan YAGONA kod
+yo'li; `promote_due_action_retries_job.py` esa FR-ACT-005'ning o'zi —
+RETRYING holatidagi action'ni backoff tugagandan keyin READY'ga
+qaytaradigan YAGONA kod yo'li. Demak ikkala funksiya ham to'liq
+qurilgan, to'liq testlangan, lekin HAQIQIY production'da (Render'da
+ham, hali qurilmagan VPS'da ham) HECH QACHON o'z-o'zidan ishga
+tushmas edi — bu "connector haqiqatda ulanmagan" yoki "outbox worker
+hech qachon continuous ishlamagan" (ADR-003, sessiya boshida topilgan)
+bilan bir xil "ko'rinishda bor, aslida hech narsa qilmaydi" naqshining
+yana bir, bu safar eng kattasi.
+
+Yechim yangi ko'rsatilgan VPS/Hetzner infratuzilmasi emas — Product
+Owner "hozircha VPS kerak emas" deganini hurmat qilib, Render'ning o'zi
+yoki kelajakdagi VPS'ning istalgan birida ishlaydigan, deploy shaklidan
+mustaqil mexanizm tanlandi: `.github/workflows/ops-jobs.yml`, yangi
+GitHub Actions scheduled workflow. Oltita alohida job (bittasi bitta
+skript — bitta skriptning muvaqqat xatosi boshqasini to'xtatib
+qo'ymasligi uchun), ikkita jadval bilan: har 15 daqiqada (ikkita
+FUNKSIONAL skript — FR-TASK-005/FR-ACT-005, ularning o'z docstring'i
+"qanchalik tez-tez — bu OD-005/hosting qarori, skriptning o'zi
+tanlamaydi" deganiga mos, aniq belgilangan, o'zgartirilishi mumkin
+standart sifatida) va kunlik (FR-AUD-004'ning o'z "Kunlik verification
+job" talabiga aynan mos, qolgan uchta kuzatuv skripti ham shu bilan
+birga).
+
+**Ataylab inert-by-design**: `DODA_PROD_DATABASE_URL` repository secret'i
+hali YO'Q (bu .env'dagi mahalliy/sandbox kalit emas — alohida, real
+production Postgres ulanish satri, masalan Render'ning `doda-postgres`
+External Database URL'i). Har bir job o'z ichida shu secret mavjudligini
+tekshiradi — bo'lmasa, aniq log xabari bilan jimgina hech narsa
+qilmaydi (xato emas, "skipped" ham emas — GitHub Actions'ning o'zida
+buning uchun alohida holat yo'q, shuning uchun step darajasida aniq
+yozib qo'yildi), xuddi Telegram/Google OAuth kodlarining kredensialsiz
+holatda jimgina kutishi kabi. Secret kelgandan keyin har bir skriptning
+o'z xato chiqishi (exit code != 0) shu job'ni GitHub'ning o'zida qizil
+qiladi, GitHub esa standart holatda repo kuzatuvchilariga email
+yuboradi — bu aynan skriptlarning o'z docstring'i aytgan "alert bu
+jarayonning o'z exit status'i, wrapper qolganini hal qilsin" talabi,
+yangi bildirishnoma kanali ixtiro qilinmadi.
+
+`deploy/README.md`ga yangi "Scheduled ops jobs" bo'limi qo'shildi —
+qanday yoqish (`DODA_PROD_DATABASE_URL` secret'ini qo'shish, Render'ning
+tashqi — ichki emas — connection string'ini ishlatish kerakligi aniq
+tushuntirilgan, chunki GitHub Actions runner Render'ning ichki
+tarmog'idan tashqarida) va halol chegara (bu workflow ham, boshqa
+Render-bog'liq hujjatlar kabi, haqiqiy Render Postgres'ga qarshi
+tasdiqlanmagan — tarmoq siyosati render.com'ni butunlay bloklaydi).
+
+Haqiqiylik ikki darajada tekshirildi: (1) YAML `python3 -c
+"import yaml; yaml.safe_load(...)"` bilan sintaktik jihatdan to'g'ri
+parslanishi, barcha oltita job va ikkita cron yozuvi to'g'ri
+ko'rinishi; (2) oltita skriptning HAR BIRI workflow'ning o'zi
+ishlatadigan aynan bir xil chaqiruv shakli bilan (`cd backend &&
+DODA_DATABASE_URL=... python scripts/<nom>.py`) shu sessiyaning real
+Postgres'iga — shu uzoq umr ko'rgan sandbox davomida to'plangan
+**19475 ta haqiqiy customer**'ga — qarshi qo'lda ishga tushirildi.
+
+**Natija "hammasi toza" degandan ancha qiziqroq va aynan shu
+workflow'ning o'zi nima uchun kerakligini to'g'ridan-to'g'ri isbotladi:**
+
+- `fire_due_reminders_job.py` (**exit 0**) — **18 ta HAQIQIY,
+  tasdiqlangan va muddati allaqachon o'tgan reminder'ni, 18 xil
+  customer bo'ylab, haqiqatda yoqib yubordi** (`REMINDER_DUE`
+  bildirishnomasi yaratib). Bular — oldingi sessiyalarda FR-TASK-005ni
+  qo'lda/E2E orqali tekshirishda yaratilgan, `confirm_reminder`
+  chaqirilgan, lekin hech qachon avtomatik yoqilmagan haqiqiy qatorlar
+  edi — aynan shu paragrafning yuqorisida tasvirlangan bo'shliqning
+  o'zi, nazariy emas, haqiqatda mavjud bo'lib chiqdi.
+- `promote_due_action_retries_job.py` (**exit 0**) — 0 ta promote
+  qilindi (hozircha RETRYING holatida, backoff'i o'tgan action yo'q).
+- `verify_audit_chain_job.py` (**exit 0**) — barcha 19475 customer'ning
+  audit zanjiri toza.
+- `verify_trace_completeness_job.py` (**exit 0**) — "19475 customers
+  checked, 0 mismatches."
+- `find_stuck_running_actions.py` (**exit 1**) — bitta, OLDINDAN
+  BILINGAN qator topdi: `find_stuck_running_actions.py`ning o'zini
+  yozishda (yuqoriga qarang) ataylab RUNNING holatida qoldirilgan
+  test-action, endi 21 kunlik (`running_since=2026-09-09`). Bu YANGI
+  xato emas — bu skriptning o'z asl verifikatsiya fixture'i, hech kim
+  tozalamagan, chunki tozalashning o'zi "find_stuck..."ning maqsadini
+  (haqiqiy qotib qolgan yozuvni topish) buzardi.
+- `find_stuck_compensating_actions.py` (**exit 1**) — xuddi shunday,
+  FR-ACT-009ning o'z verifikatsiya fixture'i (`compensating_since=
+  2026-09-18`, 12 kunlik).
+
+Oxirgi ikkitasining exit=1 bo'lishi **kutilgan va to'g'ri xulq** — bu
+ikki skriptning o'zi aynan shu ikki eski fixture'ni topish uchun
+mo'ljallangan, va workflow production'da ham xuddi shunday ishlaydi:
+har qanday haqiqiy qotib qolgan action paydo bo'lsa, kunlik job uni
+ENDI darhol (kuzatuvchiga yetib borguncha necha kun emas) ko'rsatadi.
+`fire_due_reminders_job.py`ning haqiqatda 18 ta eskirgan reminder'ni
+yoqib yuborgani esa — bu workflow qurilishidan oldin FR-TASK-005ning
+"yoqish" yarmi haqiqatda hech qachon avtomatik ishlamaganining
+to'g'ridan-to'g'ri, sintetik bo'lmagan dalili.
