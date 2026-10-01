@@ -539,6 +539,151 @@ hosil qilib), taxmin qilinmadi. Frontend'ga muddat input va "Reja"
 paneli qo'shildi. 421 test (backend); barcha 14 E2E spec yashil.
 To'liq tafsilot: `CLAUDE.md`.
 
+**FR-TASK-003 (qaror yozuvi) va FR-WKS-007'ning til qismi qurildi —
+ikkalasi ham audit_events'ning append-only naqshini (DB trigger
+UPDATE/DELETE'ni bloklaydi) qayta ishlatadi.** Task uchun variant/
+tradeoff/qaror/sabab yozuvi versiyalanadi, hech qachon o'chirilmaydi;
+workspace standart tili o'rnatilganda VERSIYALANADI VA audit qilinadi
+(ikkalasi, bitta tranzaksiyada). Ikkalasi ham migratsiya rolining o'zi
+bilan trigger'ni haqiqatda tushirib, test kutilgan tarzda qizarishini,
+keyin tiklab yashil ekanini isbotladi. 432 test.
+
+**To'rtta "o'lchov, taxmin emas" tekshiruvi qo'shildi**: NFR-ISO-003
+(AI kontekst izolyatsiyasi — bitta customer ostidagi ikki workspace,
+RLS yordam bermaydigan holatda, model gateway'ga yuborilgan tarixning
+o'zini tekshirib), NFR-PORT-001 (uchta HAQIQIY gateway — OpenAI/Gemini/
+Claude — orqali bitta HTTP oqimini haydab, hech biri maxsus branching
+talab qilmasligini isbotlab), NFR-PERF-002/003 (AI chat yuklama testi —
+standart SQLAlchemy pool sozlamalari concurrent yuklama ostida ~51x
+latency degradatsiyasi berishini topib, `db_pool_size`/`db_max_overflow`ni
+operator sozlay oladigan qildi, standart qiymat o'zgarishsiz qoldirib).
+436 test.
+
+**FR-TASK-005 (reminder so'rash+tasdiqlash) va NFR-DUR-001 (backup/
+restore drill skripti) qurildi.** Reminder — PENDING_CONFIRMATION →
+CONFIRMED → FIRED state machine, faqat ANIQ vaqt tasdiqlansa yonadi
+(erkin tildagi "trigger" ataylab qurilmadi — PO qarori kerak). Restore
+drill — real `pg_dump`/`pg_restore` + audit hash-zanjirini tiklangan
+nusxada qayta tekshirish; bu jarayon shu sandbox'ning `doda` roli
+production'dagidan farqli ravishda superuser EMASLIGINI ochib berdi
+(`--schema-only` bilan aylanib o'tildi, halol hujjatlashtirilgan). 443
+test.
+
+**FR-AUD-005 (evidence package eksport), FR-ACT-002 (dry-run preview),
+FR-ACT-007 (provider-receipt confirmation) qurildi.** Evidence package
+ikkita mustaqil tekshiruvni (har yozuvning o'z-o'ziga mosligi + butun
+zanjir bog'lanishi) bitta eksportga yig'adi. Action preview — ro'yxatga
+olingan tool'lar uchun inson o'qiy oladigan tavsif (`telegram.
+send_message` → "...ga xabar yuboradi: '...'"), ro'yxatga olinmagan
+tool'lar uchun halol fallback. Provider-receipt — `apply_transition`
+endi receipt'siz SUCCEEDED'ni rad etadi (`MissingProviderReceiptError`),
+Telegram relay endi haqiqiy `message_id`ni audit yozuviga yozadi. 453
+test.
+
+**FR-ACT-005 (in-process retry, keyin to'liq persistent retry/circuit
+breaker), FR-ACT-006 (connector credential isolation statik testi)
+qurildi — ikkalasi ham UC-004'ning MAJBURIY testlar jadvalini TRD'dan
+qayta o'qishda topilgan real xatoni tuzatishga olib keldi.** Birinchi
+qoralama HAR QANDAY HTTP xatosini (shu jumladan ReadTimeout — "xat
+aslida yuborilgan bo'lishi mumkin") qayta urinardi — bu duplikat xabar
+xavfi edi. Tuzatish: faqat haqiqatda-yetib-bormagan xatolar (ConnectError/
+429) qayta uriniladi. 0028-migratsiya `retry_count`/`next_retry_at`
+qo'shdi — sikllararo (cross-cycle) qat'iy qaytarish, `FAILED_ACTION`
+spam-bildirishnomasisiz (`notify=False` oraliq bosqich uchun). 462→572
+test (bir nechta oraliq bosqich bilan).
+
+**FR-ACT-009 (action bekor qilish/compensating oqimi), FR-AUTH-007
+(yangi qurilmadan login signali), FR-AUTH-009 (Service Actor machine
+credential oqimi) qurildi.** Action cancel/compensate — mavjud
+`apply_transition` chokepoint'ini qayta ishlatib, inson-attestatsiyali
+kompensatsiya yakunlash (haqiqiy Telegram "qaytarib olish" API'si yo'q).
+FR-AUTH-007 — faqat qurilma (User-Agent) o'lchoviga cheklandi, geografiya
+ochiq qoldirildi (yangi tashqi bog'liqlik talab qiladi). FR-AUTH-009 —
+`Session.actor_kind` (HUMAN/SERVICE) orqali R2-cap va step-up-taqiqi;
+15-security-review bitta mustaqil chaqiruv yo'lida (chat orqali yozish
+tool'i) bu cheklov umuman ishlamasligini topdi va darhol tuzatildi. 473→558
+test.
+
+**NFR-DATA-001b/c (AI so'rov ma'lumot klassifikatsiyasi — C2/C3/C4,
+Luhn-tekshiruvli karta raqami bilan soxta-musbatsiz) qurildi.**
+`ai.gateway_call.v1` audit event turi — docstring'da yozilgan, lekin
+hech qachon yozilmagan edi (RISK-006 sinfining yana bir nusxasi) — endi
+har bir chaqiruvda (muvaffaqiyatli HAM, mid-stream xato HAM) yoziladi.
+571 test.
+
+**FR-KNW-001 (fayl ingest: tur/hajm/malware validatsiyasi) — Knowledge/
+RAG domenidagi birinchi vertikal bo'lak.** FR-KNW-002+ (parsing→
+embedding→retrieval) haqiqiy AI-provider chaqiruvini talab qilgani
+uchun ataylab qoldirildi (tarmoq siyosati bloklaydi). Magic-byte
+tekshiruvi — fayl kengaytmasi/Content-Type/haqiqiy baytlar bir-biriga
+mos kelishi shart, executable imzolari (PE/ELF/shebang) har doim rad
+etiladi. `LocalFilesystemObjectStorage` — kalitni SHA-256 bilan hash
+qilib, path traversal'ni strukturaviy jihatdan imkonsiz qiladi (S3
+adapter sandbox'da Docker/boto3 yo'qligi uchun qurilmadi). FR-TASK-006
+(task'ni fayl bilan bog'lash, o'chirilgan manba "broken" deb
+belgilanadi, yashirilmaydi) ham shu asosda qurildi. 527→548 test.
+
+**FR-ADM (3.9-bo'lim) uchun to'liq dizayn taklifi yozildi
+(`docs/design-proposals/`), FR-ADM-005 (AI byudjet limitlarini
+customer darajasida belgilash) va FR-ADM-006'ning audit yarmi
+qurildi.** FR-ADM-002/003/004 (custom role/permission, connector
+consent, ABAC policy) aniq ochiq savollar bilan hujjatlashtirilib,
+ATAYLAB qurilmadi — bularning har biri yangi Product Owner/arxitektura
+qarorini talab qiladi. 536 test.
+
+**OD-004'ning provayder qarori hujjatlashtirildi (Google Cloud Speech-
+to-Text/TTS) — amalga oshirish hali boshlanmagan, haqiqiy GCP credential
+kutilmoqda** (Telegram bot tokeni/Google OAuth siri bilan bir xil
+kutish holati).
+
+**Coverage o'lchovi 11-security-review'dan keyin bitta real DoS'ga
+yaqin bo'shliqni (fayl yuklash hajm limiti tekshirilishidan OLDIN
+butun so'rov tanasini xotiraga yuklash) ochdi va yopdi** — `_read_
+bounded` endi bo'laklarda o'qiydi, limit oshsa darhol to'xtaydi. 541
+test.
+
+**FR-ACT-001'ning o'z qabul mezoni — "registrda bo'lmagan tool
+chaqiruvi rad etiladi va audit qilinadi" — haqiqatda bajarilmasdi.**
+Model noma'lum tool nomini chaqirsa, chaqiruv jimgina yo'qolardi (na
+rad etish, na audit). Yangi `ai_tool.unregistered_call_rejected.v1`
+audit yozuvi + modelga TOOL-role xato javobi (javobsiz `tool_call_id`
+holatini oldini olib). 549 test.
+
+**Uchinchi va to'rtinchi TRD-ID sweep — FR-WKS-002 (workspace
+customer_id'siz yaratilmaydi, ikki mustaqil DB qatlami) uchun test
+bo'shlig'i yopildi, `docs/assumptions.md` (ASM-001..005, TRD 8-bo'limi)
+yozildi.** ASM-003 (birinchi connector OAuth ishlatadi) taxmini
+NOTO'G'RI chiqqani, lekin zararsiz bo'lgani qayd etildi (bot-token
+modeli OAuth'dan soddaroq chiqdi).
+
+**FR-CONV-007 (xabarni tahrirlash va qayta generatsiya qilish)
+qurildi — "41 ta hech qayerda tilga olinmagan" FR-CONV oilasidan
+to'g'ri qayta baholangani.** Faqat suhbatning ENG SO'NGGI USER xabariga
+cheklandi (branching-history savolini ataylab chetlab o'tib);
+`exclude_message_ids` tarixdan chiqaradi, bazadan o'chirmaydi. 585
+test.
+
+**NFR-SCL-001'ning "ikki instansda test" usuli endi API'ning o'ziga
+ham (ilgari faqat ikki worker'ga) qo'llanildi** — ikkita mustaqil
+`uvicorn` jarayoni bir xil Postgres+Redis'ga qarshi, to'qqiz tekshiruv
+(sessiya/yozish/revoke bir instansda qilib ikkinchisida darhol ko'rish)
+bilan, barchasi PASS. Kod o'zgarmadi (`backend/scripts/two_instance_
+statelessness_check.py`).
+
+**Yigirmaga yaqin `security-review` va yettita `/simplify` ko'rib
+chiqish o'tkazildi** (har bir muhim diff'dan keyin) — aksariyati 0
+topilma bilan, bir nechtasi haqiqiy (nonce-disclosure, R2-cap bypass,
+auditor write-access, RLS predikat bo'shlig'i) tuzatish bilan yakunlandi.
+Shuningdek **coverage bir necha marta qayta o'lchandi** — har safar
+yangi, ilgari ko'zdan qochgan real bo'shliqlarni (concurrency-untested
+upsert'lar, cross-workspace tenancy nazorati yo'q endpoint'lar, hech
+qachon chaqirilmagan xato-konvertlari, hujjatlashtirilgan-lekin-hech-
+qachon-sinalmagan xavfsizlik nazoratlari) ochib berdi. To'liq, xronologik
+tafsilot: `CLAUDE.md`.
+
+**586 test, barchasi real Postgres(+Redis)'da; 17 E2E spec; umumiy
+backend qamrov 99%; `ruff`/`mypy` toza.**
+
 ## Ishga tushirish (local dev)
 
 ```bash
@@ -648,8 +793,9 @@ backend/
                     # pytest orqali emas, qo'lda real Postgres(+Redis)'ga qarshi ishga tushiriladi:
                     # verify_audit_chain_job.py, verify_trace_completeness_job.py,
                     # find_stuck_running_actions.py, find_stuck_compensating_actions.py,
-                    # fire_due_reminders_job.py, backup_restore_drill.py, load_test_api.py,
-                    # load_test_ai_chat.py, run_ai_eval_suite.py
+                    # fire_due_reminders_job.py, promote_due_action_retries_job.py,
+                    # backup_restore_drill.py, load_test_api.py, load_test_ai_chat.py,
+                    # two_instance_statelessness_check.py, run_ai_eval_suite.py
   Dockerfile, docker-entrypoint.sh  # production konteyner (Render/VPS) — api/outbox-relay/
                                      # telegram-relay uchtasi ham shu bir image'dan, faqat command farqli
   tests/
