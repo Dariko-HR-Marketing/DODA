@@ -8793,3 +8793,61 @@ hech qanday runtime regressiya keltirmaganini isbotlaydi, shunchaki
 
 Backend o'zgarmadi (586 test, o'zgarishsiz). `ruff`/`mypy`/ESLint/`tsc`
 barchasi toza.
+
+**Sog'liq tekshiruvi jarayonida muhit cheklovi o'zgargani aniqlandi — va
+bu tekshiruv haqiqiy, production'ni buzadigan topilmani ochib berdi:
+Render'da ishlatilayotgan Google OAuth client Google Cloud Console'da
+O'CHIRILGAN.** Rutin tarmoq-siyosati tekshiruvida (Telegram/OpenAI hamon
+403 bilan bloklangani tasdiqlangan holda) `oauth2.googleapis.com`,
+`generativelanguage.googleapis.com`, `api.anthropic.com`,
+`accounts.google.com`, `texttospeech.googleapis.com`/`speech.
+googleapis.com` endi haqiqiy serverlardan javob qaytarayotgani
+aniqlandi (404/302, proxy'ning 403 policy-denial'i emas — uch marta
+ketma-ket tasdiqlangan, bir martalik shovqin emas) — bu sessiyaning
+boshidan buyon "tarmoq siyosati bloklaydi" deb bir necha marta
+hujjatlashtirilgan Google/AI-provider cheklovining endi qisman
+o'zgarganini ko'rsatadi.
+
+Bu o'zgarishning o'zi FR-KNW-002+/haqiqiy Gemini-Claude-OpenAI chaqiruvini
+HALI OCHMAYDI — `.env`da hech qanday AI provider API kaliti
+(`DODA_OPENAI_API_KEY`/`DODA_GEMINI_API_KEY`/`DODA_CLAUDE_API_KEY`) yo'q,
+faqat tarmoq yo'li ochilgan, kredensial yo'q. Lekin **Google OAuth'ning
+o'zi** uchun `.env`da allaqachon haqiqiy `DODA_GOOGLE_OAUTH_CLIENT_ID`/
+`DODA_GOOGLE_OAUTH_CLIENT_SECRET` bor edi — shuning uchun endi
+`oauth2.googleapis.com/token`ga ANIQ shu kredensiallar bilan (haqiqiy
+bo'lmagan authorization code bilan, haqiqiy consent oqimisiz — foydalanuvchi
+brauzer sessiyasi talab qilinmaydi) bitta tekshiruv so'rovi yuborish
+mumkin bo'ldi, bu avvalroq imkonsiz edi.
+
+**Natija — kutilmagan, halos muhim**: Google bo'sh/noto'g'ri `code` uchun
+kutilgan `invalid_grant` o'rniga **`{"error": "deleted_client", "error_
+description": "The OAuth client was deleted."}`** qaytardi. Bu "muhit
+cheklovi" yoki "sintetik test" emas — bu Google'ning o'z serveridan
+kelgan, aniq, noaniqlik qoldirmaydigan OAuth xato kodi: `.env`da
+saqlangan (va Render deploy'ida ishlatilayotgan) Client ID Google Cloud
+Console'da ENDI MAVJUD EMAS. Amaliy oqibat: production'dagi (Render)
+"Google orqali kirish" tugmasi HOZIR haqiqiy foydalanuvchi uchun ham
+ishlamaydi — avvalgi `redirect_uri_mismatch`/`invalid_client` kabi
+tuzatish mumkin bo'lgan konfiguratsiya xatosidan farqli, bu holatda
+Google tarafida hech narsa qolmagan, faqat yangi client yaratish (yoki
+eskisini tiklash, agar Google Console buni taklif qilsa) orqaligina
+tuzatiladi.
+
+**Bu agent buni o'zi tuzata olmaydi** — Google Cloud Console'ga kirish
+huquqi yo'q (xuddi Telegram bot yaratish/Render hisobi yaratishga
+o'xshash chegara). Product Owner'ga aniq xabar berildi: Google Cloud
+Console → APIs & Credentials'da yangi OAuth 2.0 Client ID yaratish (yoki
+mavjudini qayta tiklash, agar hali mumkin bo'lsa) va natijada olingan
+Client ID/Secret'ni xavfsiz kanal orqali taqdim etish kerak — xuddi
+avvalgi uchta kredensial (Telegram token, birinchi Google client, ikkinchi
+Google client) kabi. Yangi redirect URI ro'yxati ham avvalgidek: Render
+domeni (`https://doda-backend-jv8e.onrender.com/v1/auth/google/callback`)
+va kelajakdagi VPS domeni (agar/qachon kerak bo'lsa) ikkalasi ham yangi
+client'ning "Authorized redirect URIs" ro'yxatiga qo'shilishi kerak —
+yangi client hech qanday eski ro'yxatni meros qilib olmaydi.
+
+Bu tekshiruv sintetik emas, real HTTP orqali, lekin HECH QANDAY
+sezgir ma'lumot (client_secret) chat matniga yoki logga chiqarilmadi —
+`.env`dan to'g'ridan-to'g'ri `curl`ga bitta so'rovda uzatildi, natija
+faqat Google'ning o'z xato kodi (sezgir emas). Kod o'zgarmadi — bu sof
+muhit/konfiguratsiya tekshiruvi (586 test, o'zgarishsiz).
