@@ -8666,3 +8666,38 @@ uchun uchta aniq nuqtaga e'tibor qaratildi:
 review'lar bilan bir xil.
 
 585 test o'zgarishsiz (kod o'zgarmadi — sof tekshiruv).
+
+**NFR-SCL-001ning "Ikki instansda test" o'z tekshiruv usuli endi API'ning
+O'ZIGA ham qo'llanildi — ilgari faqat ikkita WORKER (outbox_relay.py,
+telegram_relay.py) uchun qilingan edi.** Talabning o'zi ("Horizontal API
+va worker; stateless handler") ikkita teng yarimdan iborat, lekin faqat
+worker yarmi haqiqatda o'lchangan edi — API'ning o'zi (FastAPI/uvicorn
+jarayoni) chindan ham stateless ekanligini, ya'ni ikkita mustaqil nusxasi
+bir xil Postgres+Redis'ga qarshi ishga tushirilganda load balancer qaysi
+nusxaga yo'naltirishidan qat'i nazar bir xil xulq ko'rsatishini hech kim
+hech qachon tekshirmagan edi.
+
+`backend/scripts/two_instance_statelessness_check.py` — `load_test_api.py`/
+`verify_audit_chain_job.py` bilan bir xil turkumdagi mustaqil skript:
+ikkita HAQIQIY, mustaqil `uvicorn doda.main:app` jarayonini (turli
+portlarda, bir xil Postgres+Redis'ga ulangan — aynan haqiqiy horizontal
+deploy topologiyasi) talab qiladi va to'qqizta tekshiruvni o'tkazadi:
+(1) bitta bearer session ikkala instansga ham qabul qilinishi (sessiya
+hech qachon bitta jarayonning xotirasiga "yopishib qolmagani"ni
+isbotlaydi); (2) A'da yaratilgan task darhol B orqali ko'rinishi
+(jarayon-ichi read cache yo'qligini isbotlaydi); (3) B'da o'zgartirilgan
+task holati A'ning o'z tarix endpointi orqali darhol ko'rinishi (teskari
+yo'nalishdagi round-trip); (4) A orqali revoke qilingan sessiya B'ning
+ENG KEYINGI so'rovida darhol rad etilishi (revoke jarayon-darajasidagi
+tekshiruv emasligini, FR-AUTH-005'ning o'z SLA'si ikkinchi instans
+mavjud bo'lganda ham buzilmasligini isbotlaydi).
+
+Real ikkita mustaqil `uvicorn` jarayoniga (8001/8002 portlarida, bir xil
+Postgres+Redis'ga qarshi) qarshi ishga tushirib tasdiqlandi — barcha
+to'qqiz tekshiruv ham PASS berdi. Bu skript ham boshqa mustaqil
+skriptlar kabi pytest orqali emas, qo'lda tekshiriladi (o'rnatilgan
+konventsiya) — chunki haqiqiy ikkita OS jarayonini ishga tushirish talab
+qiladi, bu pytest'ning o'z test izolyatsiyasi doirasidan tashqarida.
+
+Kod o'zgarmadi (yangi mustaqil skript qo'shildi) — 585 test o'zgarishsiz,
+`ruff`/`mypy scripts/` toza.
