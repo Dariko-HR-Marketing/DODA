@@ -8632,3 +8632,37 @@ production frontend'ga (production build) qarshi barcha 17 E2E spec
 585 test (579+6), barchasi real Postgres(+Redis)'da; `ruff`/`mypy
 src/doda` toza; frontend `tsc --noEmit`/ESLint toza, production build
 muvaffaqiyatli.
+
+**O'n to'qqizinchi `security-review` — FR-CONV-007'ning o'z diff'iga
+qarshi, to'liq uch bosqichli subagent jarayoni o'rniga to'g'ridan-to'g'ri
+ko'rib chiqildi (13-/14-review'lardagi aynan shu "kichik, allaqachon
+individual isbotlangan diff" precedenti bo'yicha).** `regenerate_message`
+yangi mutatsiya endpointi (`POST .../messages/{id}/regenerate`) ochgani
+uchun uchta aniq nuqtaga e'tibor qaratildi:
+
+1. **Tenant/workspace izolyatsiyasi** — `message_id` faqat
+   `_get_owned_conversation`dan (workspace_id allaqachon tasdiqlangan)
+   kelgan `all_messages = list_messages(conversation_id=...)` ICHIDA
+   qidiriladi. `Message`ning o'zida `workspace_id` ustuni yo'q — demak
+   himoya strukturaviy: boshqa workspace'ning `message_id`sini shu
+   endpoint'ga yuborish uni HECH QACHON `all_messages`da topa olmaydi
+   (`MessageNotFoundForRegenerationError` → 404), chunki ro'yxatning o'zi
+   allaqachon bitta, tasdiqlangan conversation bilan cheklangan. Yangi
+   `test_a_sibling_workspaces_message_cannot_be_targeted_for_regeneration`
+   (bir xil customer, boshqa workspace — RLS yordam bermaydigan aynan
+   shu holat) buni tasdiqladi.
+2. **Avtorizatsiya darajasi** — `authorize_use_chat(ctx.workspace)`
+   `post_conversation_message`bilan AYNAN bir xil (Member/WorkspaceAdmin/
+   CustomerOwner) — yangi, kengroq yoki torroq ruxsat darajasi
+   kiritilmadi. Boshqa a'zoning xabarini "tahrirlash" imkoniyati yangi
+   bo'shliq emas — `GET .../messages` allaqachon butun suhbatni har bir
+   workspace a'zosiga ochadi, bu ataylab shunday (actor-darajasidagi
+   cheklov yo'q, xuddi Task/Action ro'yxatlash kabi).
+3. **Xato konvertlari** — uchta yangi handler (`api/errors.py`) boshqa
+   har biri kabi bitta `_envelope` shakliga mos, `trace_id` bilan, xom
+   exception matnini oshkor qilmaydi.
+
+**Natija: 0 topilma** — 4-, 6-, 7-, 9-, 10-, 11-, 13-, 14-, 16-, 17-
+review'lar bilan bir xil.
+
+585 test o'zgarishsiz (kod o'zgarmadi — sof tekshiruv).
