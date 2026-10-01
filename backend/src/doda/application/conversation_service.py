@@ -94,6 +94,30 @@ class DeepRequestCostCeilingExceededError(Exception):
     the shared monthly BudgetExceededError."""
 
 
+class MessageNotFoundForRegenerationError(Exception):
+    """FR-CONV-007: the referenced message does not exist in this
+    conversation — raised before any tenancy-revealing distinction
+    between "wrong id" and "belongs to a different conversation"."""
+
+
+class CannotRegenerateNonUserMessageError(Exception):
+    """FR-CONV-007 only lets a user edit their OWN message and regenerate
+    the response to it — an ASSISTANT or TOOL message is not something a
+    user "edits", it is something the model/connector produced."""
+
+
+class RegenerationTargetNotLatestError(Exception):
+    """FR-CONV-007 is deliberately scoped to the conversation's single
+    most recent user turn, not an arbitrary one further back — editing an
+    earlier message would require deciding how to represent a branching
+    conversation history (which later messages, if any, stay attached to
+    which version), a UX/design question the TRD's one-line acceptance
+    criterion ("new trace_id, doesn't delete the old one") does not
+    answer. Scoping to "latest only" sidesteps that: there is nothing
+    after the latest user turn to branch from, so regenerating it is an
+    unambiguous linear operation."""
+
+
 @dataclasses.dataclass(frozen=True)
 class TurnChunk:
     """One streamed unit the API layer turns into an SSE event. A tagged
@@ -290,6 +314,7 @@ async def stream_message(
     trace_id: uuid.UUID,
     settings: Settings,
     actor_kind: ActorKind,
+    exclude_message_ids: frozenset[uuid.UUID] = frozenset(),
 ) -> typing.AsyncGenerator[TurnChunk, None]:
     """An async generator of `TurnChunk`s — the API layer
     (`api/conversations.py`) turns each into an SSE event, and also
@@ -309,6 +334,12 @@ async def stream_message(
     the 15th security-review pass found this exact call site doing
     before `propose_action`'s own `actor_kind` was made a required
     keyword.
+
+    `exclude_message_ids` is FR-CONV-007's own hook, empty by default
+    (every ordinary call is unaffected): `regenerate_message` below uses
+    it to keep the model from seeing the stale edited-away message and
+    its old response, without deleting either row — they are excluded
+    only from THIS turn's history, never from storage.
     """
     # OD-003: block before the message is even persisted, let alone sent
     # to any provider — see doda.ai.outbound_guard's own docstring for
@@ -383,9 +414,10 @@ async def stream_message(
     # here, not discovered as a silent no-op.
     assert_supports_tools(choice.provider, requested_tools=[t.name for t in tools])
 
-    history = _messages_to_history(
-        await list_messages(session, conversation_id=conversation.id), max_chars=settings.ai_max_context_chars
-    )
+    all_messages = await list_messages(session, conversation_id=conversation.id)
+    if exclude_message_ids:
+        all_messages = [m for m in all_messages if m.id not in exclude_message_ids]
+    history = _messages_to_history(all_messages, max_chars=settings.ai_max_context_chars)
 
     def _append_tool_result(call: ToolCallRequest, text: str) -> None:
         """Shared tail of the read-tool and unregistered-tool-call branches
@@ -724,3 +756,61 @@ async def stream_message(
     await _reconcile_and_record(UsageEventStatus.RECONCILED)
 
     yield TurnChunk(kind="done", message=final_assistant_message)
+
+
+def regenerate_message(
+    session: AsyncSession,
+    conversation: Conversation,
+    *,
+    message_id: uuid.UUID,
+    new_content: str,
+    all_messages: list[Message],
+    workspace_context: WorkspaceContext,
+    mode: ChatMode,
+    trace_id: uuid.UUID,
+    settings: Settings,
+    actor_kind: ActorKind,
+) -> typing.AsyncGenerator[TurnChunk, None]:
+    """FR-CONV-007: "Xabarni tahrirlash va qayta generatsiya qilish" —
+    edit the conversation's own latest USER message and regenerate the
+    response to it. `all_messages` is `list_messages(...)`'s result,
+    already fetched by the caller (it needs it anyway to find
+    `message_id`), ordered by `created_at` ascending.
+
+    Deliberately scoped to the LATEST user turn only — see
+    `RegenerationTargetNotLatestError`'s own docstring for why editing an
+    arbitrary earlier message is a design question this does not answer.
+    Being the latest turn makes "what to exclude from history" unambiguous:
+    the edited message itself plus everything at or after its timestamp
+    (its own TOOL/ASSISTANT rows, nothing else can follow it) — those rows
+    are never deleted, only left out of the NEW turn's context, satisfying
+    the acceptance criterion's "yangi trace_id hosil qiladi, eskisini
+    o'chirmaydi" literally: a new turn (and hence a new trace_id, minted
+    the same way every HTTP request's is — `api/conversations.py`'s own
+    TraceIdMiddleware reasoning) replaces nothing in storage.
+    """
+    target = next((m for m in all_messages if m.id == message_id), None)
+    if target is None:
+        raise MessageNotFoundForRegenerationError(f"message {message_id} not found")
+    if target.role is not MessageRole.USER:
+        raise CannotRegenerateNonUserMessageError("only a USER message may be edited and regenerated")
+    latest_user_message = max(
+        (m for m in all_messages if m.role is MessageRole.USER), key=lambda m: m.created_at
+    )
+    if target.id != latest_user_message.id:
+        raise RegenerationTargetNotLatestError(
+            "only the conversation's most recent user message may be regenerated"
+        )
+
+    exclude_message_ids = frozenset(m.id for m in all_messages if m.created_at >= target.created_at)
+    return stream_message(
+        session,
+        conversation,
+        workspace_context=workspace_context,
+        content=new_content,
+        mode=mode,
+        trace_id=trace_id,
+        settings=settings,
+        actor_kind=actor_kind,
+        exclude_message_ids=exclude_message_ids,
+    )

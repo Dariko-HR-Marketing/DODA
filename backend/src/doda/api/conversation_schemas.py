@@ -17,6 +17,11 @@ class PostMessageRequest(BaseModel):
     mode: ChatMode = ChatMode.STANDARD
 
 
+class RegenerateMessageRequest(BaseModel):
+    content: str
+    mode: ChatMode = ChatMode.STANDARD
+
+
 class SwitchProviderRequest(BaseModel):
     provider: Provider
     model: str | None = None

@@ -87,6 +87,19 @@ async def _post_message(
         return response
 
 
+async def _regenerate_message(
+    client: AsyncClient, url: str, *, headers: dict[str, str], content: str, mode: str = "STANDARD"
+) -> Response:
+    """FR-CONV-007's own version of `_post_message` — same streamed-vs-
+    plain-JSON distinction applies (an invalid regeneration target never
+    reaches `regenerate_message`'s generator, so it is a plain 4xx)."""
+    async with client.stream(
+        "POST", url, json={"content": content, "mode": mode}, headers=headers
+    ) as response:
+        await response.aread()
+        return response
+
+
 async def test_missing_session_is_rejected(client: AsyncClient, db_available: bool) -> None:
     member = await seed_workspace_member()
     response = await client.post(f"/v1/workspaces/{member.workspace_id}/conversations", json={})
@@ -1938,3 +1951,177 @@ async def test_switching_mid_conversation_replays_prior_tool_call_history_to_the
     assert any(t.tool_calls and t.tool_calls[0].name == "list_my_open_tasks" for t in replayed)
     assert any(t.role is ChatRole.TOOL for t in replayed)
     assert replayed[-1].content == "davom ettiring"
+
+
+async def test_regenerating_the_latest_message_creates_new_rows_and_keeps_the_old_ones(
+    client: AsyncClient, db_available: bool
+) -> None:
+    """FR-CONV-007's own acceptance criterion, read literally: a new turn
+    (hence a new trace_id — `X-Trace-Id` is minted fresh per HTTP request,
+    the same NFR-OBS-001 mechanism `propose_action` uses) is produced, and
+    neither the original USER message nor its original ASSISTANT response
+    is deleted."""
+    member = await seed_workspace_member()
+    create = await client.post(
+        f"/v1/workspaces/{member.workspace_id}/conversations",
+        json={},
+        headers=_auth_headers(member.session_id),
+    )
+    conversation_id = create.json()["id"]
+    base_url = f"/v1/workspaces/{member.workspace_id}/conversations/{conversation_id}"
+
+    original = await _post_message(
+        client, f"{base_url}/messages", headers=_auth_headers(member.session_id), content="salom"
+    )
+    assert original.status_code == 200
+    original_trace_id = original.headers["X-Trace-Id"]
+
+    before = await client.get(f"{base_url}/messages", headers=_auth_headers(member.session_id))
+    before_rows = before.json()
+    assert [m["role"] for m in before_rows] == ["USER", "ASSISTANT"]
+    original_user_id = before_rows[0]["id"]
+
+    regenerate = await _regenerate_message(
+        client,
+        f"{base_url}/messages/{original_user_id}/regenerate",
+        headers=_auth_headers(member.session_id),
+        content="tahrirlangan salom",
+    )
+    assert regenerate.status_code == 200
+    assert regenerate.headers["X-Trace-Id"] != original_trace_id
+
+    after = await client.get(f"{base_url}/messages", headers=_auth_headers(member.session_id))
+    after_rows = after.json()
+    # Both the original pair AND the new pair exist — nothing was deleted.
+    assert [m["role"] for m in after_rows] == ["USER", "ASSISTANT", "USER", "ASSISTANT"]
+    assert after_rows[0]["id"] == original_user_id
+    assert after_rows[0]["content"] == "salom"
+    assert after_rows[2]["content"] == "tahrirlangan salom"
+
+
+async def test_regeneration_excludes_the_edited_away_turn_from_the_new_historys_context(
+    client: AsyncClient, db_available: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stronger claim behind "edit": the model generating the
+    regenerated response must never SEE the stale original message or its
+    stale original response in its context, even though neither row was
+    deleted from storage (proven separately above)."""
+    gateway = _RecordingGateway(reply_text="ikkinchi javob")
+    monkeypatch.setattr(
+        "doda.application.conversation_service.get_gateway", lambda provider, settings: gateway
+    )
+
+    member = await seed_workspace_member()
+    create = await client.post(
+        f"/v1/workspaces/{member.workspace_id}/conversations",
+        json={},
+        headers=_auth_headers(member.session_id),
+    )
+    conversation_id = create.json()["id"]
+    base_url = f"/v1/workspaces/{member.workspace_id}/conversations/{conversation_id}"
+
+    original = await _post_message(
+        client,
+        f"{base_url}/messages",
+        headers=_auth_headers(member.session_id),
+        content="MAXFIY ESKI XABAR",
+    )
+    assert original.status_code == 200
+
+    before = await client.get(f"{base_url}/messages", headers=_auth_headers(member.session_id))
+    original_user_id = before.json()[0]["id"]
+
+    regenerate = await _regenerate_message(
+        client,
+        f"{base_url}/messages/{original_user_id}/regenerate",
+        headers=_auth_headers(member.session_id),
+        content="yangi tahrirlangan xabar",
+    )
+    assert regenerate.status_code == 200
+
+    # gateway's first call was the ORIGINAL turn (before regeneration);
+    # its second call is the regenerated turn — that is the one whose
+    # history must be clean of the edited-away content.
+    assert len(gateway.received_histories) == 2
+    regenerated_history = gateway.received_histories[1]
+    assert all("MAXFIY ESKI XABAR" not in t.content for t in regenerated_history)
+    assert regenerated_history[-1].content == "yangi tahrirlangan xabar"
+
+
+async def test_regenerating_a_non_latest_user_message_is_rejected(
+    client: AsyncClient, db_available: bool
+) -> None:
+    member = await seed_workspace_member()
+    create = await client.post(
+        f"/v1/workspaces/{member.workspace_id}/conversations",
+        json={},
+        headers=_auth_headers(member.session_id),
+    )
+    conversation_id = create.json()["id"]
+    base_url = f"/v1/workspaces/{member.workspace_id}/conversations/{conversation_id}"
+
+    await _post_message(
+        client, f"{base_url}/messages", headers=_auth_headers(member.session_id), content="birinchi"
+    )
+    await _post_message(
+        client, f"{base_url}/messages", headers=_auth_headers(member.session_id), content="ikkinchi"
+    )
+    rows = (await client.get(f"{base_url}/messages", headers=_auth_headers(member.session_id))).json()
+    first_user_message_id = next(m["id"] for m in rows if m["role"] == "USER")
+
+    response = await client.post(
+        f"{base_url}/messages/{first_user_message_id}/regenerate",
+        json={"content": "kechikkan tahrir"},
+        headers=_auth_headers(member.session_id),
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "REGENERATION_TARGET_NOT_LATEST"
+
+
+async def test_regenerating_an_assistant_message_is_rejected(client: AsyncClient, db_available: bool) -> None:
+    member = await seed_workspace_member()
+    create = await client.post(
+        f"/v1/workspaces/{member.workspace_id}/conversations",
+        json={},
+        headers=_auth_headers(member.session_id),
+    )
+    conversation_id = create.json()["id"]
+    base_url = f"/v1/workspaces/{member.workspace_id}/conversations/{conversation_id}"
+
+    await _post_message(
+        client, f"{base_url}/messages", headers=_auth_headers(member.session_id), content="salom"
+    )
+    rows = (await client.get(f"{base_url}/messages", headers=_auth_headers(member.session_id))).json()
+    assistant_message_id = next(m["id"] for m in rows if m["role"] == "ASSISTANT")
+
+    response = await client.post(
+        f"{base_url}/messages/{assistant_message_id}/regenerate",
+        json={"content": "boshqa narsa"},
+        headers=_auth_headers(member.session_id),
+    )
+    assert response.status_code == 422
+    assert response.json()["code"] == "CANNOT_REGENERATE_MESSAGE"
+
+
+async def test_regenerating_an_unknown_message_id_is_404(client: AsyncClient, db_available: bool) -> None:
+    member = await seed_workspace_member()
+    create = await client.post(
+        f"/v1/workspaces/{member.workspace_id}/conversations",
+        json={},
+        headers=_auth_headers(member.session_id),
+    )
+    conversation_id = create.json()["id"]
+
+    response = await client.post(
+        f"/v1/workspaces/{member.workspace_id}/conversations/{conversation_id}/messages/{uuid.uuid4()}/regenerate",
+        json={"content": "nimadir"},
+        headers=_auth_headers(member.session_id),
+    )
+    assert response.status_code == 404
+
+    # The per-record cross-workspace tenancy guard (A's own valid
+    # conversation_id, naming B's message_id) is proven separately in
+    # test_cross_workspace_record_access.py, matching that file's own
+    # stated purpose and existing convention for this exact shape of
+    # check (see test_a_task_cannot_be_linked_to_a_sibling_workspaces_
+    # document for the identical pattern on a different domain).

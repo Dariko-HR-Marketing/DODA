@@ -29,7 +29,7 @@ paths, deliberately different:
 
 import json
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any
 
 import structlog
@@ -41,14 +41,17 @@ from doda.api.conversation_schemas import (
     CreateConversationRequest,
     MessageOut,
     PostMessageRequest,
+    RegenerateMessageRequest,
     SwitchLanguageRequest,
     SwitchProviderRequest,
 )
 from doda.api.dependencies import RequestContext, get_request_context
 from doda.application.authz_service import authorize_use_chat
 from doda.application.conversation_service import (
+    TurnChunk,
     list_conversations_for_workspace,
     list_messages,
+    regenerate_message,
     search_messages_in_workspace,
     start_conversation,
     stream_message,
@@ -197,28 +200,13 @@ def _error_frame(*, code: str, message: str, trace_id: uuid.UUID, retryable: boo
     )
 
 
-@router.post("/v1/workspaces/{workspace_id}/conversations/{conversation_id}/messages")
-async def post_conversation_message(
-    request: Request,
-    conversation_id: uuid.UUID,
-    body: PostMessageRequest,
-    ctx: RequestContext = Depends(get_request_context),
+async def _stream_turns_as_sse(
+    request: Request, turns: AsyncGenerator[TurnChunk, None], trace_id: uuid.UUID
 ) -> StreamingResponse:
-    authorize_use_chat(ctx.workspace)
-    conversation = await _get_owned_conversation(ctx, conversation_id)
-    trace_id = uuid.UUID(request.state.trace_id)
-
-    turns = stream_message(
-        ctx.db,
-        conversation,
-        workspace_context=ctx.workspace,
-        content=body.content,
-        mode=body.mode,
-        trace_id=trace_id,
-        settings=get_settings(),
-        actor_kind=ctx.actor_kind,
-    )
-
+    """Shared tail of `post_conversation_message` and
+    `regenerate_conversation_message` — both just construct a different
+    `TurnChunk` generator (`stream_message` vs `regenerate_message`) and
+    hand it to this exact same priming/SSE/cancellation/error machinery."""
     # Prime the first item BEFORE returning the StreamingResponse: every
     # pre-stream failure (BudgetExceededError, DeepRequestCostCeilingExceededError,
     # a provider error on the very first round) raises here, while we are
@@ -273,3 +261,59 @@ async def post_conversation_message(
             )
 
     return StreamingResponse(_body(), media_type="text/event-stream")
+
+
+@router.post("/v1/workspaces/{workspace_id}/conversations/{conversation_id}/messages")
+async def post_conversation_message(
+    request: Request,
+    conversation_id: uuid.UUID,
+    body: PostMessageRequest,
+    ctx: RequestContext = Depends(get_request_context),
+) -> StreamingResponse:
+    authorize_use_chat(ctx.workspace)
+    conversation = await _get_owned_conversation(ctx, conversation_id)
+    trace_id = uuid.UUID(request.state.trace_id)
+
+    turns = stream_message(
+        ctx.db,
+        conversation,
+        workspace_context=ctx.workspace,
+        content=body.content,
+        mode=body.mode,
+        trace_id=trace_id,
+        settings=get_settings(),
+        actor_kind=ctx.actor_kind,
+    )
+    return await _stream_turns_as_sse(request, turns, trace_id)
+
+
+@router.post("/v1/workspaces/{workspace_id}/conversations/{conversation_id}/messages/{message_id}/regenerate")
+async def regenerate_conversation_message(
+    request: Request,
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    body: RegenerateMessageRequest,
+    ctx: RequestContext = Depends(get_request_context),
+) -> StreamingResponse:
+    """FR-CONV-007. `message_id` must be the conversation's own latest
+    USER message — see `regenerate_message`'s and
+    `RegenerationTargetNotLatestError`'s docstrings for why this is
+    deliberately not "any message"."""
+    authorize_use_chat(ctx.workspace)
+    conversation = await _get_owned_conversation(ctx, conversation_id)
+    trace_id = uuid.UUID(request.state.trace_id)
+
+    all_messages = await list_messages(ctx.db, conversation_id=conversation.id)
+    turns = regenerate_message(
+        ctx.db,
+        conversation,
+        message_id=message_id,
+        new_content=body.content,
+        all_messages=all_messages,
+        workspace_context=ctx.workspace,
+        mode=body.mode,
+        trace_id=trace_id,
+        settings=get_settings(),
+        actor_kind=ctx.actor_kind,
+    )
+    return await _stream_turns_as_sse(request, turns, trace_id)

@@ -11,6 +11,7 @@ import {
   getWorkspaceLanguageSetting,
   listConversationMessages,
   listConversations,
+  regenerateConversationMessage,
   searchConversations,
   setWorkspaceAiPreference,
   setWorkspaceLanguageSetting,
@@ -59,6 +60,7 @@ export default function ChatPage() {
   const [workspaceLanguageChoice, setWorkspaceLanguageChoice] = useState<AiLanguage>("UZ");
   const [savingWorkspaceLanguage, setSavingWorkspaceLanguage] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   // Guards against a stale listConversationMessages() response (kicked off
@@ -73,6 +75,16 @@ export default function ChatPage() {
   const [searching, setSearching] = useState(false);
 
   const selected = conversations?.find((c) => c.id === selectedId) ?? null;
+  // FR-CONV-007: editing is only offered on the conversation's own latest
+  // USER message — matches RegenerationTargetNotLatestError's scoping on
+  // the backend exactly, so the UI never invites a request it knows will
+  // be rejected (same "don't offer what the backend will reject" posture
+  // as the Actions cancel button, which only shows for cancellable states).
+  const lastUserMessageId =
+    messages
+      ?.slice()
+      .reverse()
+      .find((m) => m.role === "USER")?.id ?? null;
 
   const refreshConversations = useCallback(() => {
     if (sessionId === null) return;
@@ -262,11 +274,24 @@ export default function ChatPage() {
     );
   }
 
+  function handleStartEdit(message: MessageOut) {
+    if (sending) return;
+    setEditingMessageId(message.id);
+    setComposerText(message.content);
+  }
+
+  function handleCancelEdit() {
+    setEditingMessageId(null);
+    setComposerText("");
+  }
+
   async function handleSend(event: FormEvent) {
     event.preventDefault();
     if (sessionId === null || selectedId === null || sending || composerText.trim().length === 0) return;
     const content = composerText.trim();
+    const regeneratingMessageId = editingMessageId;
     setComposerText("");
+    setEditingMessageId(null);
     setPendingUserText(content);
     setStreamingText("");
     setSending(true);
@@ -274,14 +299,23 @@ export default function ChatPage() {
     const controller = new AbortController();
     abortControllerRef.current = controller;
     try {
-      for await (const chunk of streamConversationMessage(
-        sessionId,
-        workspaceId,
-        selectedId,
-        content,
-        mode,
-        controller.signal,
-      )) {
+      // FR-CONV-007: editing the latest user message reuses this exact
+      // send loop, just pointed at regenerateConversationMessage instead
+      // of streamConversationMessage — both return the same TurnChunk
+      // shape, so nothing below this branch needs to know which happened.
+      const turns =
+        regeneratingMessageId !== null
+          ? regenerateConversationMessage(
+              sessionId,
+              workspaceId,
+              selectedId,
+              regeneratingMessageId,
+              content,
+              mode,
+              controller.signal,
+            )
+          : streamConversationMessage(sessionId, workspaceId, selectedId, content, mode, controller.signal);
+      for await (const chunk of turns) {
         if (chunk.kind === "text" || chunk.kind === "tool_status") {
           setStreamingText((prev) => (prev ?? "") + chunk.text);
         } else if (chunk.kind === "error") {
@@ -606,6 +640,17 @@ export default function ChatPage() {
                         </div>
                       )}
                     </div>
+                    {message.role === "USER" && message.id === lastUserMessageId && !sending && (
+                      <div>
+                        <button
+                          type="button"
+                          onClick={() => handleStartEdit(message)}
+                          className="text-xs text-gray-400 hover:text-black hover:underline"
+                        >
+                          Tahrirlash
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ))}
                 {pendingUserText !== null && (
@@ -628,6 +673,12 @@ export default function ChatPage() {
                 <div ref={bottomRef} />
               </div>
 
+              {editingMessageId !== null && (
+                <p className="text-xs text-gray-500">
+                  Oxirgi xabaringizni tahrirlayapsiz — yuborilganda yangi javob generatsiya qilinadi,
+                  eskisi o&apos;chirilmaydi.
+                </p>
+              )}
               <form onSubmit={handleSend} className="flex gap-2">
                 <select
                   aria-label="Chat rejimi"
@@ -655,8 +706,17 @@ export default function ChatPage() {
                   disabled={sending || composerText.trim().length === 0}
                   className="rounded-md bg-black px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
                 >
-                  {sending ? "..." : "Yuborish"}
+                  {sending ? "..." : editingMessageId !== null ? "Qayta generatsiya qilish" : "Yuborish"}
                 </button>
+                {editingMessageId !== null && !sending && (
+                  <button
+                    type="button"
+                    onClick={handleCancelEdit}
+                    className="rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50"
+                  >
+                    Tahrirlashni bekor qilish
+                  </button>
+                )}
                 {sending && (
                   <button
                     type="button"

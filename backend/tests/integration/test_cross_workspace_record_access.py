@@ -416,3 +416,54 @@ async def test_a_task_cannot_be_linked_to_a_sibling_workspaces_document(
         headers=_auth_headers(seeded["session_a"]),
     )
     assert response.status_code == 404
+
+
+async def test_a_sibling_workspaces_message_cannot_be_targeted_for_regeneration(
+    client: AsyncClient, db_available: bool
+) -> None:
+    """FR-CONV-007's `regenerate_message` has no `workspace_id` column on
+    `Message` to compare against directly (unlike the other guards in this
+    file) — its equivalent protection is that `message_id` is only ever
+    looked up inside `list_messages(conversation_id=<the URL's own,
+    already-validated conversation>)`. This proves that scoping actually
+    holds: A's own, otherwise-valid conversation_id does not let A reach
+    B's message_id just by naming it."""
+    seeded = await _seed_two_workspaces_one_customer()
+
+    conversation_a = await client.post(
+        f"/v1/workspaces/{seeded['workspace_a']}/conversations",
+        json={},
+        headers=_auth_headers(seeded["session_a"]),
+    )
+    assert conversation_a.status_code == 200
+    conversation_a_id = conversation_a.json()["id"]
+
+    conversation_b = await client.post(
+        f"/v1/workspaces/{seeded['workspace_b']}/conversations",
+        json={},
+        headers=_auth_headers(seeded["session_b"]),
+    )
+    assert conversation_b.status_code == 200
+    conversation_b_id = conversation_b.json()["id"]
+    async with client.stream(
+        "POST",
+        f"/v1/workspaces/{seeded['workspace_b']}/conversations/{conversation_b_id}/messages",
+        json={"content": "B's own message", "mode": "STANDARD"},
+        headers=_auth_headers(seeded["session_b"]),
+    ) as posted:
+        assert posted.status_code == 200
+        await posted.aread()
+
+    b_messages = await client.get(
+        f"/v1/workspaces/{seeded['workspace_b']}/conversations/{conversation_b_id}/messages",
+        headers=_auth_headers(seeded["session_b"]),
+    )
+    message_b_id = b_messages.json()[0]["id"]
+
+    # A names its OWN, valid conversation_id, but B's message_id.
+    response = await client.post(
+        f"/v1/workspaces/{seeded['workspace_a']}/conversations/{conversation_a_id}/messages/{message_b_id}/regenerate",
+        json={"content": "A tries to hijack B's message"},
+        headers=_auth_headers(seeded["session_a"]),
+    )
+    assert response.status_code == 404

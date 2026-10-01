@@ -813,31 +813,26 @@ export type ConversationStreamEvent =
   | { kind: "done"; message: MessageOut | null }
   | { kind: "error"; code: string; message: string; trace_id: string; retryable: boolean };
 
-export async function* streamConversationMessage(
+// Shared tail of streamConversationMessage and regenerateConversationMessage
+// below — both just POST to a different URL with the same {content, mode}
+// body and consume the identical SSE framing; only the endpoint differs.
+async function* streamTurnsFromUrl(
+  url: string,
   sessionId: string,
-  workspaceId: string,
-  conversationId: string,
   content: string,
-  mode: ChatMode = "STANDARD",
+  mode: ChatMode,
   signal?: AbortSignal,
 ): AsyncGenerator<ConversationStreamEvent> {
-  // FR-CONV-002: aborting this fetch (the caller's Cancel button) is
-  // what the backend's `Request.is_disconnected()` check
-  // (`api/conversations.py`) actually detects — there is no separate
-  // cancel endpoint; the HTTP connection itself is the cancellation
-  // signal, same as any other streaming-fetch cancellation.
-  const response = await fetch(
-    `${API_BASE_URL}/v1/workspaces/${workspaceId}/conversations/${conversationId}/messages`,
-    {
-      method: "POST",
-      headers: { ...authHeaders(sessionId), "Content-Type": "application/json" },
-      body: JSON.stringify({ content, mode }),
-      signal,
-    },
-  );
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { ...authHeaders(sessionId), "Content-Type": "application/json" },
+    body: JSON.stringify({ content, mode }),
+    signal,
+  });
 
   if (!response.ok) {
-    // Pre-stream failure (budget/capability/provider error on round 0) —
+    // Pre-stream failure (budget/capability/provider error on round 0, or
+    // a validation error like FR-CONV-007's "not the latest message") —
     // a normal JSON error body, same shape as every other endpoint.
     await throwApiError(response);
   }
@@ -864,6 +859,61 @@ export async function* streamConversationMessage(
       frameEnd = buffer.indexOf("\n\n");
     }
   }
+}
+
+// The one endpoint family that isn't plain request/response JSON: the
+// backend replies over SSE (`text/event-stream`) because a turn can take
+// several tool-call rounds (see backend/src/doda/api/conversations.py's own
+// docstring). `fetch()` + a manual ReadableStream reader is the only way
+// to consume a streaming POST body from the browser — EventSource only
+// supports GET. Event names match the backend's `_sse_frame`/TurnChunk
+// kinds exactly: "text"/"tool_status" carry `{text}`, "done" carries
+// `{message}` (the persisted final assistant Message, or null if the
+// turn ended without producing one — e.g. a write-tool call), "error" is
+// the mid-stream failure frame (`api/conversations.py`'s `_error_frame`).
+export function streamConversationMessage(
+  sessionId: string,
+  workspaceId: string,
+  conversationId: string,
+  content: string,
+  mode: ChatMode = "STANDARD",
+  signal?: AbortSignal,
+): AsyncGenerator<ConversationStreamEvent> {
+  // FR-CONV-002: aborting this fetch (the caller's Cancel button) is
+  // what the backend's `Request.is_disconnected()` check
+  // (`api/conversations.py`) actually detects — there is no separate
+  // cancel endpoint; the HTTP connection itself is the cancellation
+  // signal, same as any other streaming-fetch cancellation.
+  return streamTurnsFromUrl(
+    `${API_BASE_URL}/v1/workspaces/${workspaceId}/conversations/${conversationId}/messages`,
+    sessionId,
+    content,
+    mode,
+    signal,
+  );
+}
+
+// FR-CONV-007: edit the conversation's own latest USER message and
+// regenerate the response to it. `messageId` must be that latest message
+// (backend-enforced — `REGENERATION_TARGET_NOT_LATEST`, a 409, if not);
+// the original message/response are never deleted, only excluded from
+// the NEW turn's own context.
+export function regenerateConversationMessage(
+  sessionId: string,
+  workspaceId: string,
+  conversationId: string,
+  messageId: string,
+  content: string,
+  mode: ChatMode = "STANDARD",
+  signal?: AbortSignal,
+): AsyncGenerator<ConversationStreamEvent> {
+  return streamTurnsFromUrl(
+    `${API_BASE_URL}/v1/workspaces/${workspaceId}/conversations/${conversationId}/messages/${messageId}/regenerate`,
+    sessionId,
+    content,
+    mode,
+    signal,
+  );
 }
 
 // ---- AI: /v1/customers/{id}/ai-providers, /ai-fallback — ADR-009's settings gap ----

@@ -32,7 +32,12 @@ from doda.application.action_service import (
 from doda.application.ai_budget_service import InvalidBudgetOverrideError
 from doda.application.ai_provider_settings_service import ProviderDisabledError
 from doda.application.authz_service import AuthorizationError
-from doda.application.conversation_service import DeepRequestCostCeilingExceededError
+from doda.application.conversation_service import (
+    CannotRegenerateNonUserMessageError,
+    DeepRequestCostCeilingExceededError,
+    MessageNotFoundForRegenerationError,
+    RegenerationTargetNotLatestError,
+)
 from doda.application.customer_service import CustomerMembershipError, DuplicateMembershipError
 from doda.application.kill_switch_service import KillSwitchEngagedError
 from doda.application.notification_service import NotificationPreferenceError
@@ -454,6 +459,45 @@ def register_exception_handlers(app: FastAPI) -> None:
             content=_envelope(
                 code="DEEP_COST_CEILING_EXCEEDED",
                 message="Bu so'rov DEEP rejimning bitta so'rov uchun narx chegarasidan oshadi.",
+                trace_id=_trace_id(request),
+                retryable=False,
+            ),
+        )
+
+    @app.exception_handler(MessageNotFoundForRegenerationError)
+    async def _message_not_found_for_regeneration(
+        request: Request, exc: MessageNotFoundForRegenerationError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=404,
+            content=_envelope(
+                code="NOT_FOUND", message="Xabar topilmadi.", trace_id=_trace_id(request), retryable=False
+            ),
+        )
+
+    @app.exception_handler(CannotRegenerateNonUserMessageError)
+    async def _cannot_regenerate_non_user_message(
+        request: Request, exc: CannotRegenerateNonUserMessageError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content=_envelope(
+                code="CANNOT_REGENERATE_MESSAGE",
+                message="Faqat o'z xabaringizni tahrirlab, qayta generatsiya qilishingiz mumkin.",
+                trace_id=_trace_id(request),
+                retryable=False,
+            ),
+        )
+
+    @app.exception_handler(RegenerationTargetNotLatestError)
+    async def _regeneration_target_not_latest(
+        request: Request, exc: RegenerationTargetNotLatestError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=409,
+            content=_envelope(
+                code="REGENERATION_TARGET_NOT_LATEST",
+                message="Faqat suhbatdagi so'nggi xabarni qayta generatsiya qilish mumkin.",
                 trace_id=_trace_id(request),
                 retryable=False,
             ),

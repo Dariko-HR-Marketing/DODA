@@ -45,6 +45,33 @@ test("chat: send a message, get the real NullModelGateway reply, pin a provider"
     ).toBeVisible();
   });
 
+  await test.step("editing the latest message regenerates without deleting the original (FR-CONV-007)", async () => {
+    await page.click('button:has-text("Tahrirlash")');
+    await expect(page.getByText("Oxirgi xabaringizni tahrirlayapsiz")).toBeVisible();
+    await expect(page.getByPlaceholder("Xabar yozing...")).toHaveValue("Salom, DODA!");
+
+    await page.fill('input[placeholder="Xabar yozing..."]', "Salom, DODA! (tahrirlangan)");
+    await page.click('button:has-text("Qayta generatsiya qilish")');
+
+    await expect(page.getByText("Salom, DODA! (tahrirlangan)")).toBeVisible();
+    // The original exchange must still be there, untouched — FR-CONV-007's
+    // own acceptance criterion ("doesn't delete the old one").
+    await expect(page.getByText("Salom, DODA!", { exact: true })).toBeVisible();
+
+    const response = await page.request.get(
+      `http://localhost:8000/v1/workspaces/${WORKSPACE_ID}/conversations`,
+      { headers: { Authorization: `Bearer ${SESSION_ID}` } },
+    );
+    const conversations = await response.json();
+    const conversationId = conversations[0].id;
+    const messagesResponse = await page.request.get(
+      `http://localhost:8000/v1/workspaces/${WORKSPACE_ID}/conversations/${conversationId}/messages`,
+      { headers: { Authorization: `Bearer ${SESSION_ID}` } },
+    );
+    const messages: { role: string; content: string }[] = await messagesResponse.json();
+    expect(messages.filter((m) => m.role === "USER")).toHaveLength(2);
+  });
+
   await test.step("pinning a conversation provider persists server-side", async () => {
     // Scoped to the provider form specifically — the language form below
     // (FR-CONV-001) has its own, identically-labeled "Pin qilish" button,

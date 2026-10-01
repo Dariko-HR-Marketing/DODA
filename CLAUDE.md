@@ -8540,3 +8540,95 @@ OD-004'ning GCP STT/TTS kaliti hamon kutilmoqda), va `docker ps`/`boto3`
 hamon avvalgidek bloklangan (S3 adapter uchun, FR-KNW-001'ning o'z
 cheklovi o'zgarishsiz). 579 test, `ruff format`/`ruff check`/`mypy
 src/doda` va frontend `tsc --noEmit`/ESLint — barchasi toza.
+
+**FR-CONV-007 (Xabarni tahrirlash va qayta generatsiya qilish, Should)
+qurildi — "41 ta hech qayerda tilga olinmagan" ro'yxatidagi FR-CONV
+oilasining uchtasidan (004/005/007) BIRINCHI marta to'g'ri qayta
+baholanib, haqiqatda qurilishi mumkinligi aniqlangani.** Avvalroq uchtasi
+ham "haqiqiy model javobi kerak" deb bitta guruhga noto'g'ri qo'yilgan
+edi — qayta ko'rib chiqishda aniqlandi: FR-CONV-007'ning o'z qabul
+mezoni ("yangi trace_id, eskisini o'chirmaydi") sof orkestratsiya —
+hech qanday haqiqiy model xulq-atvoriga bog'liq emas, `NullModelGateway`/
+soxta gateway bilan ham to'liq tekshiriladi. FR-CONV-004 (noaniqlikni
+model o'zi aniqlashi kerak) va FR-CONV-005 (5 turdan 2 tasi Knowledge/RAG
+talab qiladi) to'g'ri bloklangan holda qoladi — faqat 007 noto'g'ri
+guruhlangan edi.
+
+Dizayn qarori (QOIDA 2 doirasida, Product Owner qaroriga ehtiyoj
+sezilmadi — bu oddiy, deterministik muhandislik tanlovi): tahrirlash
+FAQAT suhbatning o'zining ENG SO'NGGI USER xabariga cheklandi. TRD'ning
+bir qatorli qabul mezoni "qaysi keyingi xabarlar qaysi versiyaga
+bog'lanib qoladi" degan branching-conversation-history savoliga javob
+bermaydi — "faqat eng so'nggi" bu savolni butunlay chetlab o'tadi (eng
+so'nggi user burilishidan keyin hech narsa yo'q, demak uni qayta
+generatsiya qilish aniq, chiziqli amal). Bu FR-TASK-005'ning "trigger"ni
+faqat vaqtga, FR-AUTH-007'ning faqat qurilmaga cheklashi bilan bir xil
+"TRD'ning bitta qatori hal qilmagan noaniqlikni ataylab tor qamrov bilan
+chetlab o'tish" naqshi.
+
+`conversation_service.stream_message`ga yangi, orqaga mos
+`exclude_message_ids: frozenset[uuid.UUID] = frozenset()` parametri
+qo'shildi (standart qiymat bo'sh to'plam — mavjud 19+ chaqiruv nuqtasining
+birortasi ham o'zgarishsiz qoladi) — tarix qurilishidan OLDIN
+`all_messages`ni filtrlaydi. Yangi `regenerate_message` funksiyasi uchta
+tekshiruv bilan (`MessageNotFoundForRegenerationError` → 404,
+`CannotRegenerateNonUserMessageError` → 422, `RegenerationTargetNotLatestError`
+→ 409) tasdiqlangandan keyin, tahrirlanayotgan ESKI xabar VA undan keyin
+yaratilgan HAR BIR qator (eski assistant/tool javobi) `exclude_message_ids`ga
+qo'yiladi — bu qatorlar bazadan O'CHIRILMAYDI, faqat YANGI burilishning
+model ko'radigan kontekstidan chiqarib tashlanadi. `POST .../messages/
+{message_id}/regenerate` — `api/conversations.py`ning ilgari inline
+bo'lgan SSE priming/framing/cancellation/xato mantig'i `_stream_turns_as_sse`
+umumiy yordamchisiga chiqarildi, ikkala endpoint (`post_conversation_message`,
+`regenerate_conversation_message`) ham shuni ishlatadi — bu dedup YANGI
+endpoint yozilishi bilan BIR VAQTDA qilindi, keyingi `/simplify` pass'ga
+qoldirilmadi (loyihaning "yozish paytida dublikatsiyani tuzat" intizomi).
+
+Ikkalasi ham audit-zanjiri uslubida isbotlandi: `exclude_message_ids`
+filtrini vaqtincha olib tashlab, yangi
+`test_regeneration_excludes_the_edited_away_turns_from_the_new_historys_context`
+(`_RecordingGateway` test double orqali, ikkinchi gateway chaqiruvining
+`history`sini to'g'ridan-to'g'ri tekshirib) aynan kutilgan tarzda —
+eski, tahrirlangan matn yangi burilishning tarixida ko'rinib —
+muvaffaqiyatsiz bo'lishini ko'rsatdim; `RegenerationTargetNotLatestError`
+tekshiruvini olib tashlab, `test_regenerating_a_non_latest_user_message_is_rejected`
+aynan kutilgan tarzda (409 o'rniga 200) muvaffaqiyatsiz bo'lishini
+ko'rsatdim. Ikkalasi ham qaytarilgandan keyin yashil. Yana uchta test:
+eng so'nggi xabarni tahrirlash yangi qatorlar yaratishi va ESKI
+qatorlarni saqlab qolishi, ASSISTANT xabarini "tahrirlashga" urinish
+422, noma'lum `message_id` 404. Bitta qo'shimcha test
+`test_cross_workspace_record_access.py`ga qo'shildi — `Message`ning
+`workspace_id` ustuni YO'Q bo'lgani uchun bu yerdagi tenancy himoyasi
+strukturaviy: `message_id` faqat allaqachon tasdiqlangan
+`conversation_id` ICHIDA qidiriladi, shuning uchun A'ning haqiqiy
+`conversation_id`sini B'ning `message_id`si bilan juftlab B'ning
+xabariga yetib bo'lmasligi tasdiqlandi.
+
+Frontend: suhbat sahifasidagi eng so'nggi USER xabar pufagiga
+"Tahrirlash" tugmasi qo'shildi — FAQAT `message.id === lastUserMessageId
+&& !sending` bo'lganda ko'rinadi (backend qaysi holatda qabul qilishini
+ANIQ aks ettiradi, Actions bo'limining "faqat bekor qilinadigan holatda
+tugma ko'rsatish" konventsiyasining o'zi). Bosilganda composer'ning o'zi
+eski matn bilan to'ldiriladi (yangi forma/modal emas — mavjud
+`handleSend`ning butun SSE-iste'mol siklini qayta ishlatish uchun);
+submit tugmasi "Qayta generatsiya qilish" deb o'zgaradi va
+`regenerateConversationMessage`ni chaqiradi. `frontend/src/lib/api.ts`da
+`streamConversationMessage`ning ilgari o'ziga xos bo'lgan fetch+SSE-parse
+mantig'i `streamTurnsFromUrl`ga chiqarildi, ikkalasi (`streamConversationMessage`,
+yangi `regenerateConversationMessage`) ham shu yordamchini chaqiradi —
+backend'dagi `_stream_turns_as_sse` dedup'ining frontend tarafidagi
+aynan o'zi.
+
+`e2e/chat.spec.ts`ning mavjud birinchi testiga yangi qadam qo'shildi
+(alohida spec/seed emas — bitta xabar yuborilgandan keyingi tabiiy
+davomi): "Tahrirlash" bosilib, composer eski matn bilan to'lishi,
+tahrirlab "Qayta generatsiya qilish" bosilgach yangi javob ko'rinishi VA
+eski almashinuv hamon ko'rinishi (`exact: true` bilan, tahrirlangan
+versiyadan ajratish uchun), keyin to'g'ridan-to'g'ri backend so'rovi
+bilan suhbatda aniq 2 ta USER xabar borligi tasdiqlandi. Real backend+
+production frontend'ga (production build) qarshi barcha 17 E2E spec
+(jumladan accessibility skaneri) yashil.
+
+585 test (579+6), barchasi real Postgres(+Redis)'da; `ruff`/`mypy
+src/doda` toza; frontend `tsc --noEmit`/ESLint toza, production build
+muvaffaqiyatli.
