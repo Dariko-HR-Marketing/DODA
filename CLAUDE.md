@@ -8701,3 +8701,45 @@ qiladi, bu pytest'ning o'z test izolyatsiyasi doirasidan tashqarida.
 
 Kod o'zgarmadi (yangi mustaqil skript qo'shildi) — 585 test o'zgarishsiz,
 `ruff`/`mypy scripts/` toza.
+
+**Yana bitta "hujjatlashtirilgan, lekin hech qachon mashq qildirilmagan
+xavfsizlik/mustahkamlik xususiyati" topildi va yopildi — bu safar FR-AUTH-007
+login oqimining o'z best-effort try/except'i.** `api/auth.py`ning
+`google_login_callback`i yangi qurilma aniqlansa `notify_new_device_login`ni
+chaqiradi, va buni `try/except Exception` bilan o'rab oladi — izohning o'zi
+aniq aytadi: "login allaqachon commit bo'lgan, bu yerdagi har qanday xato
+tutilib loglansin, muvaffaqiyatli login'ni 500'ga aylantirmasin" (frontend'ning
+`logOut()` o'z revoke-so'rovi xatosini yutishi bilan bir xil "best-effort
+side action" pozitsiyasi). Coverage hisobotini qayta o'qishda aniqlandi: bu
+ANIQ ikki qator (`except` bloki) hech qachon bajarilmagan — chunki shu
+paytgacha yozilgan HAR BIR test uchun bildirishnoma yozish muvaffaqiyatli
+bo'lgan. Ya'ni bu himoya hech qachon sinalmagan — xuddi `is_new_device_login`
+docstring'idagi "known limitation" bilan bir xil sinf (8-security-review),
+faqat bu safar himoyaning o'zi, uning chegarasi emas.
+
+Yangi `test_a_failure_writing_the_new_device_notification_does_not_fail_the_
+login` (`test_auth_api.py`) `notify_new_device_login`ni monkeypatch qilib
+`RuntimeError` ko'taradigan qilib qo'yadi (ikkinchi, yangi qurilmadan login)
+va login'ning o'zi hamon muvaffaqiyatli bo'lib, qaytarilgan sessiya haqiqatda
+ishlatilishini (`GET /v1/me/workspaces` → 200) tasdiqlaydi. Audit-zanjiri
+uslubida isbotlandi: `try/except`ni vaqtincha olib tashlab, test aynan
+kutilgan tarzda (notify'ning o'z `RuntimeError`i butun so'rovni yiqitib, 500
+qaytarib) muvaffaqiyatsiz bo'lishini ko'rsatdim, keyin tuzatishni qaytarib
+(`git diff` bilan 0 farq tasdiqlab) yashil ekanini ko'rsatdim.
+
+Testni yozishda bitta amaliy xato ham o'zimda topildi va tuzatildi (push
+qilinmasdan oldin): birinchi qoralamada yangi test funksiyasini
+`test_a_new_device_login_creates_exactly_one_security_alert_per_customer`ning
+ICHIGA, uning o'z "uchinchi login, bir xil qurilma" blokidan OLDIN qo'ygan
+edim — `old_string` moslashtirishim faylning haqiqiy oxirigacha o'qimasdan,
+faqat qisman o'qilgan bo'lak ichidagi matnga mos kelgan edi, natijada ikkinchi
+funksiya avvalgi funksiyaning "dumi"ni o'zига ichiga olib qoldi
+(`NameError: customer_id`). `git checkout -- <fayl>` bilan faylni toza HEAD
+holatiga qaytarib, faylning HAQIQIY oxirini o'qib, keyin to'g'ri joyga
+qo'shib tuzatdim — bu FR-TASK-002'da allaqachon yozilgan "committed
+bo'lmagan ishni yo'qotish xavfi" darsi bilan bir xil ehtiyotkorlik, faqat bu
+safar hech qanday committed ish yo'qolmadi (xato yozishning o'zida ushlandi,
+push'dan oldin).
+
+`api/auth.py`: 96%→100%. 586 test, barchasi real Postgres'da; `ruff`/`mypy`
+toza.
