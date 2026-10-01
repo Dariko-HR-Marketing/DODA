@@ -8483,3 +8483,25 @@ xil (uchta provider gateway adapteri — real tarmoq murojaatiga bog'liq;
 
 579 test, barchasi real Postgres(+Redis)'da; `ruff`/`mypy src/doda` toza;
 umumiy backend qamrov 99%.
+
+**Yettinchi `/simplify` ko'rib chiqish — oltinchi pass'dan (`6c2a5bf`) keyingi
+diff kichik bo'lgani (4 fayl, ~180 qator — FR-ACT-005 persistent retry va
+chat race-condition tuzatishi, ikkalasi ham allaqachon alohida-alohida
+tekshirilgan: birinchisi 17-security-review'da, ikkinchisi o'zining
+revert-test-restore isbotida) uchun to'liq 4-subagent jarayoni o'rniga
+qo'lda, to'g'ridan-to'g'ri o'qib chiqildi.** Bitta haqiqiy, kichik
+takrorlanish topildi va tuzatildi:
+
+`telegram_relay.py`ning `_resolve` va yangi `_fail_with_retry` funksiyalari
+bir xil uch qatorli "tenant-scoped sessiya ochish, Action'ni yuklash,
+`None` emasligini tasdiqlash" sozlamasini mustaqil takrorlagan edi — faqat
+yuklangan action bilan nima qilinishi farq qilardi (`apply_transition`
+yoki `record_transient_failure`). Yangi `_loaded_action(customer_id,
+action_id)` async context manager'iga chiqarildi, ikkalasi ham endi shuni
+chaqiradi. Kichik, ikki chaqiruv nuqtali topilma bo'lsa-da, bu kod bazasida
+har bir avvalgi `/simplify` pass'ning "reuse" toifasi bo'yicha qabul
+qilingan standartga mos (masalan `_get_workspace_action`, `_append_tool_
+result`, `_resolve_attachment` — barchasi xuddi shunday ikki-uch chaqiruv
+nuqtali takrorlanishni yopgan edi).
+
+579 test o'zgarishsiz (sof refaktor); `ruff`/`mypy src/doda` toza.

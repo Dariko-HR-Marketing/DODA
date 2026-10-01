@@ -75,11 +75,14 @@ covered.
 import asyncio
 import signal
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any, cast
 
 import httpx
 import structlog
 from redis.asyncio import Redis
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from doda.application.action_service import apply_transition, record_transient_failure
 from doda.config import get_settings
@@ -135,6 +138,21 @@ async def _drive_to_running(customer_id: uuid.UUID, action_id: uuid.UUID) -> Act
         return action
 
 
+@asynccontextmanager
+async def _loaded_action(
+    customer_id: uuid.UUID, action_id: uuid.UUID
+) -> AsyncIterator[tuple[AsyncSession, Action]]:
+    """Shared setup for every resolution path below: open this customer's
+    tenant-scoped session and load the action it already committed into
+    existence (`_drive_to_running` or an earlier step) — never None here,
+    since a row this function's own caller just worked with cannot have
+    vanished mid-flight."""
+    async with tenant_scoped_session(customer_id) as session:
+        action = await session.get(Action, action_id)
+        assert action is not None  # we just committed it into existence above
+        yield session, action
+
+
 async def _resolve(
     customer_id: uuid.UUID,
     action_id: uuid.UUID,
@@ -142,9 +160,7 @@ async def _resolve(
     *,
     receipt: dict[str, Any] | None = None,
 ) -> None:
-    async with tenant_scoped_session(customer_id) as session:
-        action = await session.get(Action, action_id)
-        assert action is not None  # we just committed it into existence above
+    async with _loaded_action(customer_id, action_id) as (session, action):
         await apply_transition(session, action, target, actor_id=ACTOR_ID, receipt=receipt)
 
 
@@ -159,9 +175,7 @@ async def _fail_with_retry(customer_id: uuid.UUID, action_id: uuid.UUID) -> None
     proven to be transient (a Telegram send that raised TelegramSendError
     after _send_with_retries' own in-process attempts) gets the retry
     budget."""
-    async with tenant_scoped_session(customer_id) as session:
-        action = await session.get(Action, action_id)
-        assert action is not None
+    async with _loaded_action(customer_id, action_id) as (session, action):
         await record_transient_failure(session, action, actor_id=ACTOR_ID)
 
 
