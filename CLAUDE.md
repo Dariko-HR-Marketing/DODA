@@ -9205,3 +9205,67 @@ ekani ko'rsatildi.
 591 test o'zgarishsiz (sof CI-konfiguratsiya o'zgarishi, ilova kodiga
 tegilmadi); `ruff format`/`ruff check`/`mypy src/doda`/`mypy scripts/`
 barchasi toza; YAML `yaml.safe_load` bilan tasdiqlangan.
+
+**Product Owner birinchi haqiqiy AI provider kalitini taqdim etdi —
+Google AI Studio'ning bepul Gemini API kaliti — va shu kalit bilan
+chat BIRINCHI MARTA haqiqiy, ishlaydigan model javobini qaytardi.** Bu
+sessiyaning ko'p marta "bu muhitning tarmoq siyosati OpenAI/Gemini/
+Claude'ga chiqishni bloklaydi" deb hujjatlashtirilgan cheklovi oldinroq
+(check-in orqali) qisman o'zgarganligi aniqlangan edi (Gemini/Anthropic
+endpointlari endi haqiqiy serverdan javob qaytaradi), lekin kredensial
+yo'qligi sababli bu hech narsani ochmagan edi — endi kredensial ham
+keldi.
+
+Kalit `backend/.env`ga yozildi (`DODA_GEMINI_API_KEY`, gitignored,
+hech qachon committga tushmaydi, chat matnida ham qaytarilmadi).
+Tekshiruv ikki bosqichda, real HTTP orqali qilindi:
+1. `ai_provider_settings_service.test_provider_connection(Provider.GEMINI,
+   settings)`ni to'g'ridan-to'g'ri chaqirib — bu `GET .../ai-settings`
+   sahifasining "Ulanishni tekshirish" tugmasi bosganda ishlatadigan
+   AYNAN shu funksiya. Uchta urinishdan biri `ok=True` qaytardi,
+   qolgan ikkitasi Google'ning o'z `gemini-3.1-flash-lite` modelida
+   vaqtinchalik ortiqcha yuklanish xabari berdi ("This model is
+   currently experiencing high demand") — bu autentifikatsiya xatosi
+   EMAS (noto'g'ri kalit bo'lsa aniq "invalid API key" qaytargan
+   bo'lardi), balki Google tomonidagi vaqtinchalik holat, kalitning
+   o'zi to'g'ri qabul qilinganini isbotlaydi.
+2. To'liq, haqiqiy chat oqimi: `seed_e2e_demo.py` bilan vaqtinchalik
+   customer/workspace/session yaratib, workspace standart provayderini
+   `PUT .../ai-preference` orqali GEMINI'ga o'rnatib, haqiqiy
+   `POST .../conversations/{id}/messages` so'rovi yuborildi (o'zbekcha
+   savol: "Salom! Bir so'z bilan javob ber: ishlayapsanmi?"). SSE javobi
+   real Gemini'dan keldi: `{"text": "Ha."}`, keyin `done` freymi
+   `provider: "GEMINI"`, `model: "gemini-3.1-flash-lite"` bilan — bu
+   butun orkestratsiya zanjirini (provayder tanlash, byudjet reserve/
+   reconcile, SSE streaming, xabar saqlash) birinchi marta haqiqiy
+   provayderga qarshi, `NullModelGateway`/mock-transport emas, to'liq
+   ishlashini isbotladi.
+
+Hujjatlar yangilandi: `docs/adr/ADR-009-multi-provider-gemini-claude.md`
+ning "no real end-to-end call" degan eski "honest limitation" qatori
+endi yangi haqiqatga mos — Gemini uchun bu cheklov yopildi, Claude
+uchun hamon ochiq (Anthropic kaliti hali kelmagan). `docs/risk-
+register.md`ning RISK-004 qatoriga ham mos yangilanish qo'shildi.
+
+**Production (Render) uchun alohida qadam kerak** — bu sandbox'ning
+`.env`i va Render'ning o'z muhit o'zgaruvchilari ikkita mustaqil
+saqlash joyi, biri ikkinchisiga avtomatik ko'chmaydi. `render.yaml`ga
+`DODA_GEMINI_API_KEY` (`sync: false`) qo'shildi — Google/Telegram
+kredensiallari bilan bir xil naqsh, qiymat hech qachon fayl ichida
+emas. `deploy/README.md`ning "uchta `sync: false`" bo'limi ham mos
+yangilandi, jumladan ANIQ eslatma bilan: `doda-backend` xizmati
+ALLAQACHON mavjud bo'lgani uchun (bu sof Blueprint-dan-noldan-qurish
+emas) Render render.yaml'ga yangi qo'shilgan `sync: false` kalit uchun
+AVTOMATIK qayta so'ramaydi — Product Owner buni xizmatning o'z
+"Environment" bo'limidan qo'lda qo'shishi kerak.
+
+**Halol qolgan holat**: bu kalit faqat SHU sandbox'ning `.env`ida —
+Render'da hali yo'q, shuning uchun production'dagi chat hamon "provayder
+tanlanmagan" xabarini beradi, Product Owner Render dashboard'ida
+yuqoridagi qadamni bajarmaguncha. OpenAI'ning o'zi hamon tarmoq
+darajasida bloklangan (`api.openai.com`), Claude'ning tarmoq yo'li ochiq
+bo'lsa-da, Anthropic kaliti hali taqdim etilmagan.
+
+Kod o'zgarmadi (hech qanday yangi implementatsiya kerak bo'lmadi — butun
+zanjir allaqachon ADR-008/009'da qurilgan edi, faqat kredensial yetishmas
+edi) — 591 test o'zgarishsiz, `ruff`/`mypy` toza.

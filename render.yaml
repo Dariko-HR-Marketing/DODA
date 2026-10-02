@@ -97,6 +97,14 @@ services:
         sync: false
       - key: DODA_TELEGRAM_BOT_TOKEN
         sync: false
+      # First real AI provider key (Google AI Studio's standard, free-
+      # tier Gemini key) — verified working against the real Gemini API
+      # in this sandbox's own .env (never committed there either). Must
+      # be added here too, separately, for production chat to work on
+      # Render — this sandbox's .env and Render's own env vars are two
+      # independent stores, neither syncs to the other.
+      - key: DODA_GEMINI_API_KEY
+        sync: false
 
   - type: web
     name: doda-frontend

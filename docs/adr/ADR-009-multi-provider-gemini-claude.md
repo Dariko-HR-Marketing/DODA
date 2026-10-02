@@ -160,12 +160,20 @@ for the first future model/provider that genuinely lacks one of these.
   `AIProviderVerification` row — server-wide, not per customer, because
   the credential itself is a server-wide `Settings` value with no BYOK
   model.
-- This environment's network egress policy blocks
-  `generativelanguage.googleapis.com`/`api.anthropic.com` the same way it
-  blocks `api.openai.com` (ADR-008) — no real end-to-end Gemini or Claude
-  call has ever been made from this session. Both adapters are verified
-  only via mock-transport tests exercising their real SDK's own parsing/
-  streaming code, never a live API call.
+- **Update**: this environment's network egress policy later changed to
+  allow `generativelanguage.googleapis.com`/`api.anthropic.com` (confirmed
+  by real HTTP probes; `api.openai.com` remains blocked — see
+  `docs/open-decisions.md`'s OD-004 history). Once the Product Owner
+  provided a real Gemini API key (Google AI Studio, free tier), a real
+  end-to-end Gemini call was made and succeeded over HTTP: both
+  `test_provider_connection` directly and a full chat turn through
+  `POST /v1/workspaces/{id}/conversations/{id}/messages` returned a real
+  model response ("Ha." to an Uzbek smoke-test prompt), confirming the
+  whole orchestration path (provider selection, budget
+  reserve/reconcile, SSE streaming, message persistence) works against a
+  live provider, not just `NullModelGateway`/mock-transport tests. Claude
+  remains untested against its real API — no Anthropic key has been
+  provided yet.
 - Pricing for `claude-sonnet-5`/`gemini-3.1-flash-lite` is the same
   honest-sourcing caveat as ADR-008's OpenAI figures: a multi-source
   web-search consensus, not a primary-source confirmation (see

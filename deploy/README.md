@@ -93,13 +93,21 @@ someone runs that same check against the real service.
    repo → the branch this PR is on. Render reads `render.yaml` and shows
    a preview of what it's about to create (one Postgres database, two
    web services) — click **Apply**.
-3. Render will pause on two environment variables marked `sync: false`
+3. Render will pause on three environment variables marked `sync: false`
    in `render.yaml` and ask you to fill them in yourself, **directly in
    Render's dashboard** — never send these values to me:
    - `DODA_GOOGLE_OAUTH_CLIENT_SECRET` — the value you already have.
    - `DODA_TELEGRAM_BOT_TOKEN` — optional; leave blank if you'd rather
      wait for Redis to exist before the Telegram connector can do
      anything useful anyway.
+   - `DODA_GEMINI_API_KEY` — your Google AI Studio key, for chat to give
+     real answers instead of "no provider configured" on production.
+     **If `doda-backend` already exists** (this isn't a from-scratch
+     Blueprint apply), Render won't re-prompt for a newly-added
+     `sync: false` key on its own — add it yourself: the service's own
+     page → **Environment** tab → **Add Environment Variable** → key
+     `DODA_GEMINI_API_KEY`, your key as the value → save (this triggers
+     a redeploy automatically).
 4. **Google Cloud Console** — add an Authorized redirect URI for the
    `doda-backend` service Render just created. Render assigned this
    Blueprint's services suffixed hostnames rather than the clean
