@@ -107,6 +107,23 @@ services:
       # independent stores, neither syncs to the other.
       - key: DODA_GEMINI_API_KEY
         sync: false
+      # OpenAI — the system default provider (Settings.ai_default_provider).
+      # This sandbox's own network policy blocks api.openai.com, so a real
+      # chat call could not be made here (same blocked-host situation as
+      # api.telegram.org before it) — Render's own network has no such
+      # restriction, so this is the first environment where it can
+      # actually be tested.
+      - key: DODA_OPENAI_API_KEY
+        sync: false
+      # Claude — verified authenticating correctly against the real
+      # Anthropic API (api.anthropic.com) from this sandbox, but that
+      # account currently has no API credit balance (a real, distinct
+      # BadRequestError from Anthropic: "Your credit balance is too low to
+      # access the Anthropic API"), so a real chat completion could not be
+      # proven end-to-end yet — add credits at console.anthropic.com →
+      # Plans & Billing first, independent of this key being wired in here.
+      - key: DODA_CLAUDE_API_KEY
+        sync: false
 
   - type: web
     name: doda-frontend
