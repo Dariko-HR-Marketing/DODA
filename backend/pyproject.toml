@@ -108,3 +108,13 @@ warn_unused_ignores = true
 warn_redundant_casts = true
 disallow_untyped_defs = false
 ignore_missing_imports = true
+# Without this, `mypy scripts` (CI's own, separate "mypy (scripts)" step —
+# its own file set never includes src/doda) cannot resolve the editable
+# `doda` package install via normal import-path discovery and, combined
+# with ignore_missing_imports above, silently falls back to `Any` for
+# EVERY `doda.*` symbol a script imports — so a real call-site bug (a
+# missing required keyword argument, say) goes completely unflagged,
+# `reveal_type()` on any such import confirms `Any`. `mypy src/doda
+# scripts` run together catches it correctly; this setting makes `mypy
+# scripts` alone do the same, by pointing it at the real source tree.
+mypy_path = "src"

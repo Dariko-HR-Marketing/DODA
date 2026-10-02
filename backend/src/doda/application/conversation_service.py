@@ -48,6 +48,7 @@ from doda.ai.errors import (
     SensitiveContentBlockedError,
 )
 from doda.ai.factory import get_gateway
+from doda.ai.groundedness import GROUNDEDNESS_INSTRUCTION
 from doda.ai.language import detect_language, response_language_instruction
 from doda.ai.outbound_guard import detect_likely_secret
 from doda.ai.types import (
@@ -263,7 +264,20 @@ def _messages_to_history(messages: list[Message], *, max_chars: int) -> list[Cha
     messages first, up to a character budget, no summarization/retrieval
     (Knowledge/RAG doesn't exist to do either yet). Reconstructs tool-
     call turns from the stored tool_name/tool_arguments_json columns, not
-    just plain text, so multi-turn tool use replays correctly."""
+    just plain text, so multi-turn tool use replays correctly.
+
+    Known, accepted gap: the `ToolCallRequest`s built here never carry
+    `provider_metadata` (`Message` has no column for it) — so a tool-
+    call turn from an EARLIER HTTP turn, replayed into a NEW turn's
+    history, loses Gemini's own thought_signature even though
+    `doda.infrastructure.gemini_gateway` now round-trips it correctly
+    WITHIN one turn (see that module's docstring for why it's required
+    at all). This would reproduce the same real, API-confirmed 400
+    INVALID_ARGUMENT a fresh conversation never hits. Fixing it needs a
+    `Message` column plus a migration — deliberately out of scope here;
+    the common case (reference a tool call from several turns back in
+    the SAME conversation) is rare enough that this is recorded as a
+    known limitation rather than built speculatively."""
     selected: list[Message] = []
     total_chars = 0
     for message in reversed(messages):
@@ -381,7 +395,14 @@ async def stream_message(
     effective_language = await resolve_effective_language(
         session, conversation, content, workspace_id=workspace_context.workspace_id
     )
-    instructions = response_language_instruction(effective_language)
+    # FR-KNW-006: the groundedness/honesty directive is unconditional —
+    # unlike the language directive above, it never falls back to "no
+    # instruction at all", since the honesty discipline it asks for
+    # applies whether or not this particular turn ends up calling
+    # knowledge_search.
+    instructions = " ".join(
+        part for part in (response_language_instruction(effective_language), GROUNDEDNESS_INSTRUCTION) if part
+    )
 
     choice = await ai_preference_service.resolve_provider_choice(
         session,

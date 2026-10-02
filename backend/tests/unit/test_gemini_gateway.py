@@ -10,13 +10,23 @@ tests/integration/test_conversations_api.py and the eval harness for
 what exercises a real key, when one is present.
 """
 
+import base64
 import json
 
 import httpx
 import pytest
 
 from doda.ai.errors import ModelProviderError, ModelRateLimitedError, ModelTimeoutError
-from doda.ai.types import ChatMode, ChatRole, ChatTurn, Completed, TextDelta, ToolCallReady, ToolSpec
+from doda.ai.types import (
+    ChatMode,
+    ChatRole,
+    ChatTurn,
+    Completed,
+    TextDelta,
+    ToolCallReady,
+    ToolCallRequest,
+    ToolSpec,
+)
 from doda.infrastructure.gemini_gateway import GeminiGateway
 
 FAKE_API_KEY = "AIzaSuperSecretTestKeyMustNeverLeak"
@@ -132,6 +142,98 @@ async def test_tool_call_is_surfaced_with_full_arguments() -> None:
     assert json.loads(calls[0].call.arguments_json) == {"limit": 5}
     completed = [e for e in events if isinstance(e, Completed)]
     assert completed[0].finish_reason == "tool_calls"
+
+
+async def test_a_tool_calls_thought_signature_is_captured_in_provider_metadata() -> None:
+    """Verified against the real API (2026-10-02): Gemini attaches a
+    `thoughtSignature` to every function-call Part this model emits —
+    `.function_calls` (the SDK's own convenience property) silently
+    drops it, since it lives on the Part, not on FunctionCall itself.
+    This pins that the gateway reads it from the right place."""
+    signature_b64 = base64.b64encode(b"opaque-signature-bytes").decode()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = _sse_body(
+            [
+                {
+                    "candidates": [
+                        {
+                            "content": {
+                                "role": "model",
+                                "parts": [
+                                    {
+                                        "functionCall": {
+                                            "id": "call_1",
+                                            "name": "knowledge_search",
+                                            "args": {},
+                                        },
+                                        "thoughtSignature": signature_b64,
+                                    }
+                                ],
+                            },
+                            "finishReason": "STOP",
+                            "index": 0,
+                        }
+                    ]
+                }
+            ]
+        )
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body)
+
+    gateway = _gateway(handler)
+    events = await _collect(
+        gateway, tools=[ToolSpec(name="knowledge_search", description="...", parameters_schema={})]
+    )
+
+    calls = [e for e in events if isinstance(e, ToolCallReady)]
+    assert len(calls) == 1
+    assert calls[0].call.provider_metadata == {"thought_signature": b"opaque-signature-bytes"}
+
+
+async def test_a_captured_thought_signature_is_echoed_back_on_replay() -> None:
+    """The other half of the round-trip: a history turn carrying
+    `provider_metadata` from a prior round must have its thought_
+    signature reattached to the function-call Part on the NEXT request —
+    real API confirmed (2026-10-02) that omitting it here gets the whole
+    request rejected (400 INVALID_ARGUMENT), not just degraded quality."""
+    captured_bodies: list[bytes] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_bodies.append(request.content)
+        body = _sse_body(
+            [
+                {
+                    "candidates": [
+                        {"content": {"role": "model", "parts": [{"text": "ok"}]}, "finishReason": "STOP"}
+                    ]
+                }
+            ]
+        )
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body)
+
+    gateway = _gateway(handler)
+    history = [
+        ChatTurn(role=ChatRole.USER, content="salom"),
+        ChatTurn(
+            role=ChatRole.ASSISTANT,
+            content="",
+            tool_calls=[
+                ToolCallRequest(
+                    call_id="call_1",
+                    name="knowledge_search",
+                    arguments_json="{}",
+                    provider_metadata={"thought_signature": b"opaque-signature-bytes"},
+                )
+            ],
+        ),
+        ChatTurn(role=ChatRole.TOOL, content="No matching documents found.", tool_call_id="call_1"),
+    ]
+    await _collect(gateway, history=history)
+
+    assert len(captured_bodies) == 1
+    sent = json.loads(captured_bodies[0])
+    model_turn = next(c for c in sent["contents"] if c["role"] == "model")
+    assert model_turn["parts"][0]["thoughtSignature"] == base64.b64encode(b"opaque-signature-bytes").decode()
 
 
 async def test_rate_limit_error_is_translated_without_leaking_the_key() -> None:

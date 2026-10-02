@@ -9562,3 +9562,107 @@ qaytarib (`git diff` bilan 0 farq tasdiqlab) yashil ekanini ko'rsatdim.
 Kod o'zgarmadi — mexanizmning o'zi allaqachon to'g'ri edi, faqat yangi
 test qo'shildi. 647 test, barchasi real Postgres'da; `ruff`/`mypy
 src/doda`/`mypy scripts/` toza.
+
+**FR-KNW-006 (Manba topilmasa DODA buni ochiq aytadi, Must) qurildi — va
+buni real Gemini'ga qarshi isbotlash jarayonining o'zi, aloqasiz, jiddiy
+bir xato — Gemini'ning ko'p bosqichli tool-chaqiruvi butunlay buzuq
+ekani — ni birinchi marta ochib berdi.** Qabul mezoni — "'Ma'lumot
+yetarli emas' eval stsenariylari PASS" — faqat haqiqiy model chaqiruvi
+bilan isbotlanadigan prompt-engineering ishi, kod-darajasidagi gate
+emas (`doda.ai.groundedness`ning o'z docstring'i bu farqni `file_
+validation.py`'ning "malware validatsiyasi" bilan bir xil tilda
+chizadi). Yangi `GROUNDEDNESS_INSTRUCTION`
+(`backend/src/doda/ai/groundedness.py`) — "agar knowledge_search hech
+narsa topmasa yoki yetarli ma'lumot bo'lmasa, ochiq ayt, taxmin qilma"
+— `conversation_service.stream_message`'ning `instructions` qatoriga
+SHARTSIZ qo'shildi, FR-CONV-001'ning shartli til-ko'rsatmasi bilan bir
+qatorda (lekin undan farqli — bu hech qachon bo'sh emas). Mavjud yagona
+`instructions == [""]` testi yangilandi.
+
+`backend/scripts/groundedness_eval.py` — boshqa mustaqil eval skriptlari
+(`retrieval_eval.py`, `run_ai_eval_suite.py`) bilan bir xil konventsiya:
+real sozlangan provayderga qarshi ishga tushiriladi, hech qanday
+provayder bo'lmasa bosh tortadi. Uchta stsenariy: `fictional_identifier`
+(o'ylab topilgan kod, hujjat yo'q), `unanswered_by_documents` (embedding
+sozlangan bo'lsa — haqiqiy, lekin aloqasiz hujjatlar, `knowledge_search`
+aniq "topilmadi" qaytarishi kerak), `easy_factual_control` (oddiy savol
+— ko'rsatma modelni hamma narsadan bosh tortishga majburlamasligini
+isbotlaydigan nazorat). Hukm — shaffof kalit-so'z evristikasi.
+
+**Birinchi real ishga tushirishda Gemini uchta stsenariydan ikkitasida
+yangi, jiddiy xato bilan qulab tushdi: "Function call is missing a
+thought_signature in functionCall parts" (400 INVALID_ARGUMENT).**
+`gemini-3.1-flash-lite` har bir function-call Part'iga opaque `thought_
+signature` biriktiradi va buni keyingi so'rovda aynan qaytarmasa, BUTUN
+so'rovni rad etadi. Sabab: `google-genai`'ning qulay `response.function_
+calls` xususiyati `FunctionCall`ni Part'dan ajratib olib, signature'ni
+(Part'ning alohida maydoni, `FunctionCall`da yo'q) jimgina tashlab
+yuboradi — `gemini_gateway.py` buni hech qachon o'qimagan, demak hech
+qachon qaytarmagan edi. Bu mening yangi `knowledge_search` ishlatuvchi
+eval stsenariylarim birinchi marta haqiqiy Gemini'ga qarshi, ko'p
+bosqichli tool-aylanish bilan ishga tushgani uchun ochilgan, taxmin
+qilinmagan xato — demak bu kod bazasida Gemini + tool-chaqiruv (FR-KNW-003
+`knowledge_search`, `list_my_open_tasks`, `telegram_send_message` —
+hammasi) HECH QACHON ishlamagan edi, faqat hech kim buni real API'ga
+qarshi, ko'p bosqichli holatda sinamagan edi.
+
+Real API'ga qarshi uchta alohida tekshiruv bilan tasdiqlandi: (1)
+`thinking_budget=0` muammoni hal qilmaydi — model baribir signature
+biriktiradi; (2) signature'ni qo'lda qayta biriktirish muammoni to'liq
+hal qiladi; (3) wire-format `thoughtSignature` (camelCase, base64).
+Tuzatish: `doda.ai.types.ToolCallRequest`ga yangi, ixtiyoriy `provider_
+metadata: dict[str, Any] | None = None` maydoni qo'shildi — provayder-
+neytral turni buzmaydi (hech narsa provayder nomini atamaydi), faqat
+bitta adapterga kerak bo'lgan narsani xavfsiz tashish uchun umumiy
+bo'shliq. `gemini_gateway.py`ning `stream_chat`i endi `chunk.function_
+calls` o'rniga `candidate.content.parts`ni to'g'ridan-to'g'ri aylanib,
+har bir Part'ning o'z `thought_signature`sini `provider_metadata`ga
+joylaydi; `_to_gemini_contents` shu metadata'dan o'qib qayta biriktiradi.
+
+Audit-zanjiri uslubida isbotlandi: `_to_gemini_contents`ning signature
+biriktirish qatorini vaqtincha olib tashlab, yangi
+`test_a_captured_thought_signature_is_echoed_back_on_replay`
+(`test_gemini_gateway.py`, real wire-shape — HTTP so'rov tanasi
+ushlanib) aynan kutilgan `KeyError: 'thoughtSignature'` bilan
+muvaffaqiyatsiz bo'lishini ko'rsatdim, keyin qaytarib (`git diff` bilan
+0 farq tasdiqlab) yashil ekanini ko'rsatdim. Ikkinchi yangi test
+(`test_a_tool_calls_thought_signature_is_captured_in_provider_metadata`)
+javobdan o'qish yarmini tekshiradi.
+
+**Ataylab qolgan bo'shliq**: bu faqat BIR HTTP burilish ichidagi
+round-trip'ni tuzatadi. Bir nechta HTTP so'rov oldin chaqirilgan tool
+call suhbat tarixiga (`_messages_to_history`, DB'dan qayta qurilganda)
+kirsa, `Message` jadvalida bunday ustun yo'qligi sababli signature
+baribir yo'qoladi — yangi migratsiya + `Message` ustuni talab qiladi,
+bu ishning doirasidan tashqarida ataylab qoldirildi,
+`conversation_service.py`ning o'z docstring'ida ochiq yozilgan.
+
+Tuzatishdan KEYIN Gemini uchala stsenariyda ham PASS berdi — real,
+sintetik bo'lmagan javoblar bilan: ikkala "hedge" stsenariyida ham
+model ochiq "Bu savolga javob berish uchun ma'lumot yetarli emas" deb
+javob berdi, nazorat stsenariysida esa to'g'ridan-to'g'ri "4" javobini
+berdi. OpenAI (tarmoq bloklangan) va Claude (Anthropic hisobida kredit
+yetarli emas) — ikkalasi ham oldindan hujjatlashtirilgan, bu ish bilan
+aloqasiz sabablar bilan ERROR qaytardi, halol shunday qayd etildi.
+
+**Yo'l-yo'lakay topilgan, aloqasiz ikkinchi xato**: `mypy scripts`
+(CI'ning o'z, alohida "mypy (scripts)" bosqichi) `doda` paketini
+editable-install orqali o'zining fayl to'plamidan TASHQARIDA hech qachon
+to'g'ri aniqlay olmas edi — `ignore_missing_imports = true` bilan
+birgalikda, bu HAR BIR `doda.*` import'ini jimgina `Any`ga aylantirib,
+haqiqiy chaqiruv-joyidagi xatolarni umuman ushlamasdi (`reveal_type()`
+bilan tasdiqlandi). Bu aynan `backend/scripts/run_ai_eval_suite.py`'da
+HAQIQIY, ishlamaydigan holatga olib kelgan edi: `stream_message`ga
+FR-AUTH-009's R2-cap tuzatishida qo'shilgan majburiy `actor_kind`
+argumenti hech qachon uzatilmagan, lekin `mypy scripts` buni hech
+qachon ko'rsatmagan edi — demak bu skriptning o'zi (14.2-bo'lim gate'i
+"yopilgan" deb hisoblangandan beri) har safar `TypeError` bilan qulagan
+bo'lardi. `pyproject.toml`ning `[tool.mypy]`siga `mypy_path = "src"`
+qo'shilib tuzatildi (`mypy src/doda scripts`ni BIRGA ishga tushirish
+muammoni avval ko'rsatganini tasdiqlab, keyin shu konfiguratsiya yechimi
+alohida, tezroq `mypy scripts` chaqiruvi uchun ham xuddi shunday
+ishlashi tasdiqlandi) — `run_ai_eval_suite.py`ning o'zi ham to'g'ri
+`actor_kind=ActorKind.HUMAN` bilan tuzatildi.
+
+652 test, barchasi real Postgres(+Redis)'da; `ruff`/`mypy src/doda`/
+`mypy scripts` toza.

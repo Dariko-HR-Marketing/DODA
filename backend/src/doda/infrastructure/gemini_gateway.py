@@ -65,17 +65,20 @@ def _to_gemini_contents(history: list[ChatTurn]) -> list[genai_types.Content]:
                 )
             )
         elif turn.tool_calls:
-            contents.append(
-                genai_types.Content(
-                    role="model",
-                    parts=[
-                        genai_types.Part.from_function_call(
-                            name=call.name, args=json.loads(call.arguments_json)
-                        )
-                        for call in turn.tool_calls
-                    ],
+            parts: list[genai_types.Part] = []
+            for call in turn.tool_calls:
+                part = genai_types.Part.from_function_call(
+                    name=call.name, args=json.loads(call.arguments_json)
                 )
-            )
+                # Echo back whatever thought_signature this call's own
+                # ToolCallReady carried (see stream_chat and
+                # ToolCallRequest.provider_metadata's own docstrings) —
+                # omitting it is what the real API rejects outright for
+                # this model.
+                if call.provider_metadata is not None:
+                    part.thought_signature = call.provider_metadata.get("thought_signature")
+                parts.append(part)
+            contents.append(genai_types.Content(role="model", parts=parts))
         else:
             role = "user" if turn.role is ChatRole.USER else "model"
             contents.append(
@@ -167,8 +170,32 @@ class GeminiGateway:
         structured_text = ""
         try:
             async for chunk in stream:
-                for index, call in enumerate(chunk.function_calls or []):
+                # Not `chunk.function_calls` (the SDK's own convenience
+                # property): it extracts only `FunctionCall`, discarding
+                # the sibling `thought_signature` field that lives on the
+                # `Part` itself, not on `FunctionCall`. Verified against
+                # the real API (2026-10-02): Gemini attaches a
+                # thought_signature to every function-call Part this
+                # model (gemini-3.1-flash-lite) emits, THINKING_CONFIG
+                # disabled or not, and REJECTS the next request outright
+                # (400 INVALID_ARGUMENT) if a function-call Part in the
+                # replayed history is missing it — not a soft warning
+                # despite the error text's own wording. See
+                # ToolCallRequest.provider_metadata's own docstring for
+                # where this gets carried to and read back from.
+                parts = (
+                    chunk.candidates[0].content.parts
+                    if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts
+                    else []
+                )
+                for index, part in enumerate(parts):
+                    call = part.function_call
+                    if call is None:
+                        continue
                     saw_tool_call = True
+                    provider_metadata = (
+                        {"thought_signature": part.thought_signature} if part.thought_signature else None
+                    )
                     # Gemini does not always assign FunctionCall.id — when
                     # absent, synthesize one scoped to this chunk/index so
                     # concurrent calls in the same turn can never collide;
@@ -181,6 +208,7 @@ class GeminiGateway:
                             call_id=call.id or f"gemini-call-{call.name}-{index}",
                             name=call.name or "",
                             arguments_json=json.dumps(call.args or {}),
+                            provider_metadata=provider_metadata,
                         )
                     )
                 text = chunk.text

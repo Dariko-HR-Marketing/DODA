@@ -39,7 +39,7 @@ from doda.application.workspace_service import create_workspace
 from doda.config import get_settings
 from doda.db import tenant_scoped_session
 from doda.domain.customer.models import Customer, CustomerMembership
-from doda.domain.identity.models import User
+from doda.domain.identity.models import ActorKind, User
 from doda.domain.security.roles import WorkspaceRole
 from doda.domain.task.models import Task, TaskStatus
 from doda.domain.workspace.models import WorkspaceMembership
@@ -182,6 +182,7 @@ async def _run_task_against_provider(
                 mode=task.mode,
                 trace_id=uuid.uuid4(),
                 settings=settings,
+                actor_kind=ActorKind.HUMAN,
             ):
                 if chunk.kind == "text":
                     text_parts.append(chunk.text)

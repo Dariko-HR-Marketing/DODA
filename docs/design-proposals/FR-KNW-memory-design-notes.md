@@ -17,7 +17,7 @@ qondirmaydi — bu hujjat har bir ID'ni alohida, TRD'ning o'z matniga
 | FR-KNW-003 | — | **Qurildi** — keyword (ILIKE, per-word) + vector (cosine distance) + metadata filter (document_id), Reciprocal Rank Fusion bilan birlashtirilgan. Pastga qarang. |
 | FR-KNW-004 | C | 003'ning retrieval natijasisiz "manba"ning o'zi yo'q edi — endi 003 qurilgan, lekin FR-KNW-004'ning o'z qabul mezoni (citation UI/format) alohida, hali qurilmagan ish — 003 faqat uning ORQASIDAGI retrieval mexanizmini ta'minlaydi |
 | FR-KNW-005 | — | **Qurildi** — mexanizmning o'zi (CASCADE + blob delete) 002/001 davridanoq bor edi, lekin TRD'ning o'z qabul mezoni ("retrieval 0 qaytaradi; blob mavjud emas") hech qachon shu aniq shaklda, end-to-end tekshirilmagan edi. Pastga qarang. |
-| FR-KNW-006 | C | 003 endi qurilgan, lekin "manba topilmasa ochiq ayt" (chat javobining o'zi) alohida ish — bugun `knowledge_search` tool'i "No matching documents found." deb aniq qaytaradi (model buni ko'radi), lekin modelning bu javobni QANDAY taqdim qilishi (masalan "bu savolga javob topa olmadim" deb ochiq aytishi) prompt-injection emas, modelning o'z javobi — tekshirilmagan |
+| FR-KNW-006 | — | **Qurildi** — unconditional `GROUNDEDNESS_INSTRUCTION` har bir burilishga qo'shiladi, real Gemini'ga qarshi uch stsenariyli eval bilan isbotlandi (`backend/scripts/groundedness_eval.py`). Pastga qarang. |
 | FR-KNW-007 / FR-CTL-004 | C (qisman A) | "Preference" xotira turi allaqachon boshqa ID'lar ostida qurilgan; qolgan to'rt turi (Working/Episodic/Semantic/Sensitive) yangi PO qarori kerak |
 | FR-KNW-008 | C | Asinxron ingest+progress — 002'ning SINXRON versiyasi qurilgandan keyin ham, bu hamon alohida ish (job-queue infratuzilmasi, FR-KNW-002'ning o'z docstring'ida ochiq qoldirilgan) |
 | FR-KNW-009 | C | Versiyalash DB darajasida mustaqil qurilishi mumkin, lekin "retrieval'dan chiqarish" 003'ning o'z mexanizmini talab qiladi — 003 endi qurilgan, lekin versiyalashning o'zi (DocumentChunk bir nechta versiyasi) hali yo'q |
@@ -292,3 +292,131 @@ muvaffaqiyatsiz bo'lishini ko'rsatdim, keyin qaytarib (`git diff` bilan
 Postgres'da; `ruff`/`mypy src/doda`/`mypy scripts` toza. Kod o'zgarmadi
 (faqat yangi test) — mexanizmning o'zi allaqachon to'g'ri edi, endi
 TRD'ning o'z so'zlari bilan, to'liq isbotlangan.
+
+## FR-KNW-006: qurilgan holat (texnik tafsilot)
+
+Qabul mezoni — "'Ma'lumot yetarli emas' eval stsenariylari PASS" — sof
+prompt-engineering ishi, haqiqiy model chaqiruvisiz "isbotlab" bo'lmaydi
+(bu AI qatlamining o'zi: kod-darajasidagi gate emas, `doda.ai.
+groundedness`ning o'z docstring'i bu farqni `file_validation.py`'ning
+"malware validatsiyasi" bilan bir xil tilda chizadi). `GROUNDEDNESS_
+INSTRUCTION` (`backend/src/doda/ai/groundedness.py`) — `knowledge_search`
+hech narsa topmasa yoki modelning o'zida yetarli ma'lumot bo'lmasa, buni
+ochiq aytish, taxmin qilmaslik, to'qib chiqarmaslik haqidagi aniq
+ko'rsatma — `conversation_service.stream_message`'ning `instructions`
+qatoriga SHARTSIZ qo'shildi (FR-CONV-001'ning shartli til-ko'rsatmasi
+bilan bir qatorda, lekin undan farqli — til ko'rsatmasi ba'zan bo'sh
+bo'ladi, bu esa hech qachon). Mavjud yagona `instructions == [""]`
+testi (`test_an_ambiguous_message_sends_no_language_directive_at_all`)
+yangilandi — endi aniq bo'sh bo'lmasligini tasdiqlaydi.
+
+`backend/scripts/groundedness_eval.py` — boshqa mustaqil eval
+skriptlari (`retrieval_eval.py`, `run_ai_eval_suite.py`) bilan bir xil
+konventsiya: pytest emas, qo'lda ishga tushiriladi, real sozlangan
+provayderga qarshi, hech qanday provayder sozlanmasa ishdan bosh
+tortadi (NullModelGateway'ning soxta "pass"ini oldini olish uchun).
+Uchta stsenariy, bittasi emas — "haddan tashqari ehtiyotkor" bo'lib
+qolmasligini (hamma narsaga "bilmayman" deyish) tekshirish ham xuddi
+haqiqiy ishonchni tekshirishning o'zi kabi muhim:
+- `fictional_identifier` — mavjud bo'lmagan, o'ylab topilgan kod haqida
+  so'raladi, hujjat yo'q.
+- `unanswered_by_documents` — embedding sozlangan bo'lsagina ishga
+  tushadi: workspace'ga haqiqiy, lekin aloqasiz hujjatlar yuklanadi,
+  `knowledge_search` chaqirilishi aniq so'raladi, u haqiqatda "hech narsa
+  topilmadi" qaytarishi kerak.
+- `easy_factual_control` — oddiy, javobi aniq savol (nazorat): bu
+  ko'rsatma modelni hamma narsadan bosh tortishga majburlamasligini
+  isbotlaydi.
+
+Hukm — Uzbek/English "bilmayman" iboralarining oddiy, shaffof ro'yxati
+(statistik baholovchi emas) — `retrieval_eval.py`'ning o'zi ham xuddi
+shunday halol chegarani qabul qiladi.
+
+**Birinchi real ishga tushirishda yangi, jiddiy, aloqasiz xato chiqdi:
+Gemini'ning ko'p bosqichli tool-chaqiruvi (model → tool call → tool
+natija → yakuniy javob, BIR HTTP so'rovi ichida) butunlay buzuq edi.**
+`gemini-3.1-flash-lite` har bir function-call Part'iga `thought_
+signature` (opaque, Gemini'ning o'z "fikrlash" davomiyligini saqlash
+uchun signature'i) biriktiradi — va buni KEYINGI so'rovda aynan
+qaytarmasa, Gemini `400 INVALID_ARGUMENT` bilan BUTUN so'rovni rad
+etadi ("Function call is missing a thought_signature..."). Bu
+`google-genai`'ning o'z qulay `response.function_calls` xususiyati
+`FunctionCall`ni Part'dan ajratib olib, signature'ni (Part'ning o'z,
+alohida maydoni, `FunctionCall`da yo'q) jimgina tashlab yuborgani
+sababli `gemini_gateway.py`da hech qachon o'qilmagan, demak hech qachon
+keyingi so'rovga qaytarilmagan edi — bu AYNAN mening yangi `knowledge_
+search`ni ishlatadigan eval stsenariylarim birinchi marta haqiqiy
+Gemini'ga qarshi, ko'p bosqichli tool-aylanish bilan ishga tushgani
+uchun ochilgan, taxmin qilinmagan, real xato.
+
+Real API'ga qarshi (`/tmp/gemini_probe*.py`, uchta alohida tekshiruv)
+tasdiqlandi: (1) `thinking_budget=0` muammoni HAL QILMAYDI — model
+baribir signature biriktiradi; (2) signature'ni qo'lda qayta
+biriktirish muammoni to'liq hal qiladi (ikkinchi so'rov muvaffaqiyatli,
+haqiqiy javob matni bilan); (3) wire-format `thoughtSignature` (camelCase,
+base64), `google-genai`ning o'zi `bytes <-> base64` konvertatsiyasini
+avtomatik bajaradi.
+
+Tuzatish: `doda.ai.types.ToolCallRequest`ga yangi, ixtiyoriy
+`provider_metadata: dict[str, Any] | None = None` maydoni qo'shildi —
+provayder-neytral turni buzmaydi (hech narsa provayder nomini
+ATAMAYDI), faqat bitta adapterga kerak bo'lgan narsani xavfsiz
+tashishga mo'ljallangan umumiy bo'shliq, boshqa adapterlar uni e'tiborsiz
+qoldiradi. `gemini_gateway.py`ning `stream_chat`i endi `chunk.
+function_calls` o'rniga `candidate.content.parts`ni to'g'ridan-to'g'ri
+aylanib, har bir `function_call` Part'ning o'z `thought_signature`sini
+`provider_metadata`ga joylaydi; `_to_gemini_contents` esa shu
+metadata'dan signature'ni o'qib, qayta qurilgan `Part.from_function_
+call(...)`ga biriktiradi.
+
+Ikkala yo'nalish ham `test_gemini_gateway.py`'da real wire-shape bilan
+tekshirildi (`MockTransport` orqali, haqiqiy HTTP so'rov tanasi
+ushlanib): signature javobdan to'g'ri o'qilishi, va keyingi so'rovning
+JSON tanasida to'g'ri `thoughtSignature` bilan qaytarilishi. Audit-
+zanjiri uslubida isbotlandi — `_to_gemini_contents`ning signature
+biriktirish qatorini vaqtincha olib tashlab, replay-testi aynan
+kutilgan `KeyError: 'thoughtSignature'` bilan muvaffaqiyatsiz bo'lishi
+ko'rsatildi, keyin qaytarib (`diff` bilan 0 farq tasdiqlab) yashil
+ekani ko'rsatildi.
+
+**Ataylab qolgan bo'shliq**: bu faqat BIR HTTP burilish ichidagi
+(round-trip) holatni tuzatadi. Agar bir nechta HTTP so'rov oldin
+chaqirilgan tool call suhbat TARIXIGA (`_messages_to_history`, DB'dan
+qayta qurilganda) kirsa, `Message` jadvalida `provider_metadata`ni
+saqlaydigan ustun yo'qligi sababli signature baribir yo'qoladi — bu
+holat ham AYNAN shu xatoni qayta hosil qiladi (yangi migratsiya +
+`Message` ustuni talab qiladi, bu ishning doirasidan tashqarida ataylab
+qoldirildi, `conversation_service.py`ning o'z docstring'ida ochiq
+yozilgan).
+
+**Birinchi real ishga tushirishda OpenAI (tarmoq siyosati bloklaydi) va
+Claude (Anthropic hisobida kredit yetarli emas) — ikkalasi ham oldindan
+hujjatlashtirilgan, bu ish bilan aloqasiz sabablar bilan — ERROR
+qaytardi.** Gemini tuzatishdan KEYIN uchala stsenariy ham (fictional_
+identifier, unanswered_by_documents, easy_factual_control) PASS berdi —
+real, sintetik bo'lmagan Gemini javoblari bilan: ikkala "hedge"
+stsenariyida ham model ochiq "Bu savolga javob berish uchun ma'lumot
+yetarli emas" deb javob berdi, nazorat stsenariysida esa to'g'ridan-
+to'g'ri "4" javobini berdi — ko'rsatma modelni haddan tashqari
+ehtiyotkor qilib qo'ymagani tasdiqlandi.
+
+652 test, barchasi real Postgres(+Redis)'da; `ruff`/`mypy src/doda`/
+`mypy scripts` toza.
+
+**Yo'l-yo'lakay topilgan, aloqasiz ikkinchi xato**: `mypy scripts`
+(CI'ning o'z, alohida "mypy (scripts)" bosqichi) `doda` paketini
+editable-install orqali o'zining fayl to'plamidan TASHQARIDA hech qachon
+to'g'ri aniqlay olmas edi — `ignore_missing_imports = true` bilan
+birgalikda, bu HAR BIR `doda.*` import'ini jimgina `Any`ga aylantirib,
+haqiqiy chaqiruv-joyidagi xatolarni (masalan, kerakli argumentning
+yo'qligi) umuman ushlamasdi. `reveal_type()` bilan tasdiqlandi. Bu
+aynan `backend/scripts/run_ai_eval_suite.py`'ning o'zida HAQIQIY,
+ishlamaydigan holatga olib kelgan edi: `stream_message`ga FR-AUTH-009's
+R2-cap tuzatishida qo'shilgan majburiy `actor_kind` argumenti hech
+qachon uzatilmagan, lekin `mypy scripts` buni hech qachon ko'rsatmagan
+edi. `pyproject.toml`ning `[tool.mypy]`siga `mypy_path = "src"`
+qo'shilib tuzatildi (`mypy src/doda scripts`ni BIRGA ishga tushirish
+muammoni ko'rsatganini avval tasdiqlab, keyin bu konfiguratsiya
+yechimi alohida, tezroq `mypy scripts` chaqiruvi uchun ham xuddi shunday
+ishlashi tasdiqlandi) — `run_ai_eval_suite.py`ning o'zi ham to'g'ri
+`actor_kind=ActorKind.HUMAN` bilan tuzatildi.

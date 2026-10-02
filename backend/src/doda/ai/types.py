@@ -67,11 +67,27 @@ class ToolCallRequest:
     reconstructed from stored history (`doda.domain.conversation.models.
     Message`) for a DIFFERENT provider than the one that originally made
     the call, `call_id` is a freshly synthesized id, never the original
-    provider's own id carried across — see `ChatTurn.tool_calls`."""
+    provider's own id carried across — see `ChatTurn.tool_calls`.
+
+    `provider_metadata` is an opaque, provider-owned bag an adapter may
+    stash extra data in when yielding `ToolCallReady` and read back out
+    of when replaying this same call in a later `stream_chat` round
+    (same turn) — e.g. Gemini's own `thought_signature`, which its API
+    requires to be echoed back verbatim on any function-call Part it
+    appears on, or the next request is rejected outright (verified
+    against the real API; see `doda.infrastructure.gemini_gateway`'s own
+    docstring). Every other adapter ignores it; this type stays
+    provider-neutral in the sense that matters — nothing here NAMES a
+    provider — while still giving one somewhere safe to round-trip
+    something it alone needs. Never reconstructed from stored history
+    (`doda.application.conversation_service._messages_to_history`) — a
+    cross-HTTP-turn Gemini tool-call replay is a known, accepted gap,
+    not solved by this field; see that module's own notes."""
 
     call_id: str
     name: str
     arguments_json: str
+    provider_metadata: dict[str, Any] | None = None
 
 
 @dataclasses.dataclass(frozen=True)
