@@ -38,8 +38,12 @@ jobs:
         run: |
           set -euo pipefail
           since=$(date -u -d '30 days ago' +%Y-%m-%d)
-          total=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow uptime-check.yml \
-            --created ">=$since" --json conclusion --jq 'length')
+          # One fetch of the last 30 days' run history — both numbers
+          # below are derived from this same cached payload, not two
+          # separate hits against GitHub's API for the same run set.
+          runs=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow uptime-check.yml \
+            --created ">=$since" --json conclusion)
+          total=$(echo "$runs" | jq 'length')
           if [ "$total" -eq 0 ]; then
             {
               echo "## Uptime report — last 30 days"
@@ -51,9 +55,7 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          success=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow uptime-check.yml \
-            --created ">=$since" --json conclusion \
-            --jq '[.[] | select(.conclusion == "success")] | length')
+          success=$(echo "$runs" | jq '[.[] | select(.conclusion == "success")] | length')
           pct=$(python3 -c "print(f'{$success / $total * 100:.2f}')")
           {
             echo "## Uptime report — last 30 days"

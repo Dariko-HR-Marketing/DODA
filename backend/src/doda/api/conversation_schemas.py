@@ -17,9 +17,9 @@ class PostMessageRequest(BaseModel):
     mode: ChatMode = ChatMode.STANDARD
 
 
-class RegenerateMessageRequest(BaseModel):
-    content: str
-    mode: ChatMode = ChatMode.STANDARD
+class RegenerateMessageRequest(PostMessageRequest):
+    """Same shape as PostMessageRequest — kept as a distinct name for
+    readability at the call site, not because the fields differ."""
 
 
 class SwitchProviderRequest(BaseModel):

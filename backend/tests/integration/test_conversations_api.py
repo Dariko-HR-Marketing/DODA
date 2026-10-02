@@ -49,7 +49,7 @@ from doda.domain.customer.models import CustomerMembership
 from doda.domain.identity.models import ActorKind, AuthStrength, User
 from doda.domain.workspace.models import Workspace
 from doda.main import app
-from tests.integration.conftest import seed_workspace_member
+from tests.integration.conftest import SeededMember, seed_workspace_member
 
 
 @pytest.fixture
@@ -73,6 +73,20 @@ def _parse_sse(body: str) -> list[tuple[str, dict]]:
     return events
 
 
+async def _create_conversation(client: AsyncClient, member: SeededMember) -> tuple[str, str]:
+    """Returns `(conversation_id, base_url)` — the FR-CONV-007 regenerate
+    tests below all need a fresh conversation before exercising edit/
+    regenerate on it, and none of them care about anything else from the
+    create response."""
+    create = await client.post(
+        f"/v1/workspaces/{member.workspace_id}/conversations",
+        json={},
+        headers=_auth_headers(member.session_id),
+    )
+    conversation_id = create.json()["id"]
+    return conversation_id, f"/v1/workspaces/{member.workspace_id}/conversations/{conversation_id}"
+
+
 async def _post_message(
     client: AsyncClient, url: str, *, headers: dict[str, str], content: str, mode: str = "STANDARD"
 ) -> Response:
@@ -80,19 +94,6 @@ async def _post_message(
     (never reaches `stream_message`) is a plain JSON error response, same
     as every other endpoint — callers check `response.status_code` before
     assuming the body is SSE."""
-    async with client.stream(
-        "POST", url, json={"content": content, "mode": mode}, headers=headers
-    ) as response:
-        await response.aread()
-        return response
-
-
-async def _regenerate_message(
-    client: AsyncClient, url: str, *, headers: dict[str, str], content: str, mode: str = "STANDARD"
-) -> Response:
-    """FR-CONV-007's own version of `_post_message` — same streamed-vs-
-    plain-JSON distinction applies (an invalid regeneration target never
-    reaches `regenerate_message`'s generator, so it is a plain 4xx)."""
     async with client.stream(
         "POST", url, json={"content": content, "mode": mode}, headers=headers
     ) as response:
@@ -1962,13 +1963,7 @@ async def test_regenerating_the_latest_message_creates_new_rows_and_keeps_the_ol
     neither the original USER message nor its original ASSISTANT response
     is deleted."""
     member = await seed_workspace_member()
-    create = await client.post(
-        f"/v1/workspaces/{member.workspace_id}/conversations",
-        json={},
-        headers=_auth_headers(member.session_id),
-    )
-    conversation_id = create.json()["id"]
-    base_url = f"/v1/workspaces/{member.workspace_id}/conversations/{conversation_id}"
+    _, base_url = await _create_conversation(client, member)
 
     original = await _post_message(
         client, f"{base_url}/messages", headers=_auth_headers(member.session_id), content="salom"
@@ -1981,7 +1976,7 @@ async def test_regenerating_the_latest_message_creates_new_rows_and_keeps_the_ol
     assert [m["role"] for m in before_rows] == ["USER", "ASSISTANT"]
     original_user_id = before_rows[0]["id"]
 
-    regenerate = await _regenerate_message(
+    regenerate = await _post_message(
         client,
         f"{base_url}/messages/{original_user_id}/regenerate",
         headers=_auth_headers(member.session_id),
@@ -2012,13 +2007,7 @@ async def test_regeneration_excludes_the_edited_away_turn_from_the_new_historys_
     )
 
     member = await seed_workspace_member()
-    create = await client.post(
-        f"/v1/workspaces/{member.workspace_id}/conversations",
-        json={},
-        headers=_auth_headers(member.session_id),
-    )
-    conversation_id = create.json()["id"]
-    base_url = f"/v1/workspaces/{member.workspace_id}/conversations/{conversation_id}"
+    _, base_url = await _create_conversation(client, member)
 
     original = await _post_message(
         client,
@@ -2031,7 +2020,7 @@ async def test_regeneration_excludes_the_edited_away_turn_from_the_new_historys_
     before = await client.get(f"{base_url}/messages", headers=_auth_headers(member.session_id))
     original_user_id = before.json()[0]["id"]
 
-    regenerate = await _regenerate_message(
+    regenerate = await _post_message(
         client,
         f"{base_url}/messages/{original_user_id}/regenerate",
         headers=_auth_headers(member.session_id),
@@ -2052,13 +2041,7 @@ async def test_regenerating_a_non_latest_user_message_is_rejected(
     client: AsyncClient, db_available: bool
 ) -> None:
     member = await seed_workspace_member()
-    create = await client.post(
-        f"/v1/workspaces/{member.workspace_id}/conversations",
-        json={},
-        headers=_auth_headers(member.session_id),
-    )
-    conversation_id = create.json()["id"]
-    base_url = f"/v1/workspaces/{member.workspace_id}/conversations/{conversation_id}"
+    _, base_url = await _create_conversation(client, member)
 
     await _post_message(
         client, f"{base_url}/messages", headers=_auth_headers(member.session_id), content="birinchi"
@@ -2080,13 +2063,7 @@ async def test_regenerating_a_non_latest_user_message_is_rejected(
 
 async def test_regenerating_an_assistant_message_is_rejected(client: AsyncClient, db_available: bool) -> None:
     member = await seed_workspace_member()
-    create = await client.post(
-        f"/v1/workspaces/{member.workspace_id}/conversations",
-        json={},
-        headers=_auth_headers(member.session_id),
-    )
-    conversation_id = create.json()["id"]
-    base_url = f"/v1/workspaces/{member.workspace_id}/conversations/{conversation_id}"
+    _, base_url = await _create_conversation(client, member)
 
     await _post_message(
         client, f"{base_url}/messages", headers=_auth_headers(member.session_id), content="salom"
@@ -2105,15 +2082,10 @@ async def test_regenerating_an_assistant_message_is_rejected(client: AsyncClient
 
 async def test_regenerating_an_unknown_message_id_is_404(client: AsyncClient, db_available: bool) -> None:
     member = await seed_workspace_member()
-    create = await client.post(
-        f"/v1/workspaces/{member.workspace_id}/conversations",
-        json={},
-        headers=_auth_headers(member.session_id),
-    )
-    conversation_id = create.json()["id"]
+    _, base_url = await _create_conversation(client, member)
 
     response = await client.post(
-        f"/v1/workspaces/{member.workspace_id}/conversations/{conversation_id}/messages/{uuid.uuid4()}/regenerate",
+        f"{base_url}/messages/{uuid.uuid4()}/regenerate",
         json={"content": "nimadir"},
         headers=_auth_headers(member.session_id),
     )

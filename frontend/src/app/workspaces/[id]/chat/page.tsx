@@ -80,11 +80,7 @@ export default function ChatPage() {
   // the backend exactly, so the UI never invites a request it knows will
   // be rejected (same "don't offer what the backend will reject" posture
   // as the Actions cancel button, which only shows for cancellable states).
-  const lastUserMessageId =
-    messages
-      ?.slice()
-      .reverse()
-      .find((m) => m.role === "USER")?.id ?? null;
+  const lastUserMessageId = messages?.findLast((m) => m.role === "USER")?.id ?? null;
 
   const refreshConversations = useCallback(() => {
     if (sessionId === null) return;

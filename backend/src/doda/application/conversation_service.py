@@ -789,20 +789,22 @@ def regenerate_message(
     the same way every HTTP request's is — `api/conversations.py`'s own
     TraceIdMiddleware reasoning) replaces nothing in storage.
     """
-    target = next((m for m in all_messages if m.id == message_id), None)
-    if target is None:
+    target_index = next((i for i, m in enumerate(all_messages) if m.id == message_id), None)
+    if target_index is None:
         raise MessageNotFoundForRegenerationError(f"message {message_id} not found")
+    target = all_messages[target_index]
     if target.role is not MessageRole.USER:
         raise CannotRegenerateNonUserMessageError("only a USER message may be edited and regenerated")
-    latest_user_message = max(
-        (m for m in all_messages if m.role is MessageRole.USER), key=lambda m: m.created_at
-    )
-    if target.id != latest_user_message.id:
+    # `all_messages` is ascending by created_at (list_messages' own
+    # guarantee), so "target is the latest USER message" is just "no
+    # later USER message exists" — no need for a separate max()-over-the-
+    # whole-list scan to find and compare against the latest one.
+    if any(m.role is MessageRole.USER for m in all_messages[target_index + 1 :]):
         raise RegenerationTargetNotLatestError(
             "only the conversation's most recent user message may be regenerated"
         )
 
-    exclude_message_ids = frozenset(m.id for m in all_messages if m.created_at >= target.created_at)
+    exclude_message_ids = frozenset(m.id for m in all_messages[target_index:])
     return stream_message(
         session,
         conversation,
