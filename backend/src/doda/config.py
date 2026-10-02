@@ -83,6 +83,21 @@ class Settings(BaseSettings):
     # multi-hundred-MB uploads this v1 (in-memory read, no streaming/
     # chunked upload) is not built to handle efficiently.
     knowledge_max_file_size_bytes: int = 25 * 1024 * 1024
+    # FR-KNW-002: the one real embedding adapter for v1 (doda.ai.
+    # embedding_port's own docstring explains why only Gemini — Anthropic
+    # has no embedding endpoint at all, and api.openai.com is still
+    # blocked from this sandbox). gemini-embedding-2 is the current
+    # stable (non-preview) embedding model, verified reachable and
+    # working against the real API 2026-10-02 (3072-dim output,
+    # confirmed to fit pgvector 0.6.0's column limits in this same
+    # deployment — see migration 0029's own comment).
+    ai_embedding_model_gemini: str = "gemini-embedding-2"
+    # Character-based, same "no tokenizer dependency needed for a
+    # first-pass budget" reasoning as ai_max_context_chars. Overlap
+    # keeps a sentence that straddles a chunk boundary findable from
+    # either neighboring chunk once retrieval (FR-KNW-003) exists.
+    knowledge_chunk_size_chars: int = 2000
+    knowledge_chunk_overlap_chars: int = 200
     otel_service_name: str = "doda-backend"
     # OD-002: first real connector. Read only by infrastructure/telegram_*
     # (the connector itself) -- never by domain/application code, never

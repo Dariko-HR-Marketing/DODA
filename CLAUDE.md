@@ -9293,3 +9293,109 @@ Ataylab qurilmagan: haqiqiy `doda.infrastructure.google_speech` adapteri (kreden
 Yechim markazlashtirilgan, bitta joyda: yangi `tests/conftest.py` (bu paytgacha root darajasida umuman mavjud bo'lmagan — faqat `tests/integration/conftest.py` bor edi) — `autouse=True` fixture `Settings.__init__`ni monkeypatch qilib, `openai_api_key`/`gemini_api_key`/`claude_api_key`ni HAR DOIM `None`ga `setdefault` qiladi, pydantic-settings'ning o'z ustuvorlik qoidasi orqali (`init kwargs > env > .env fayl`) — bu `test_config.py`ning allaqachon mavjud, aniq `Settings(telegram_bot_token=...)` kabi qurilishlariga HECH QANDAY ta'sir qilmaydi (ularning o'z aniq kalit-so'z argumenti ustuvor bo'lib qoladi). Bu yondashuv tanlashdan oldin ikkita boshqa yo'l (env var'ni bo'sh satrga o'rnatish — `SecretStr('')`ga aylanadi, `None`ga emas; `env_file`ni butunlay o'chirish — DB/Redis URL'lariga ham ta'sir qilardi) real, qo'lda sinab ko'rilib, ikkalasi ham rad etildi. Tuzatishdan keyin barcha 10 test, hech qanday assertion o'zgarishisiz, yashil bo'ldi; butun suite (599 test, yangi voice scaffolding testlari bilan birga) real Postgres+Redis'ga qarshi ikki marta (tuzatishdan oldin va keyin) ishga tushirilib, aynan kutilgan farq (10 ta muvaffaqiyatsizlik → 0) tasdiqlandi.
 
 599 test, barchasi real Postgres+Redis'da; `ruff`/`mypy src/doda` toza.
+
+**FR-KNW-002 (Parsing → chunking → embedding → indexing pipeline, Must)
+qurildi — "davom ettirgin" ko'rsatmasidan keyin, Gemini kaliti haqiqatda
+ishlayotgani va bu muhitning Google'ga tarmoq yo'li (oldinroq, OAuth
+tekshiruvida) ochiq ekani tasdiqlangandan keyin.** `docs/design-
+proposals/FR-KNW-memory-design-notes.md` FR-KNW-002..009'ni bitta umumiy
+blokerga ("real embedding chaqiruvi yo'q") bog'lagan edi — bu bloker endi
+haqiqatda yo'q, shuning uchun TRD 3.5-bo'limini qayta o'qib (xotiradan
+emas) qabul mezonini aniqladim: "Har chunk source lineage (source_id,
+version_id, offset) saqlaydi" — bu sof ingest-pipeline talabi, retrieval
+(FR-KNW-003, eval to'plami talab qiladi) yoki UI bilan bog'liq emas.
+
+Texnik asoslar avval tekshirildi, taxmin qilinmadi: `vector` extension
+0001-migratsiyada allaqachon yaratilgan edi (pgvector 0.6.0, hech qachon
+ishlatilmagan), lekin `pgvector` (Python/SQLAlchemy paketi), `pypdf`,
+`python-docx`, `openpyxl` o'rnatilmagan edi — to'rttasi ham o'rnatildi va
+`pyproject.toml`ga qo'shildi. Real Gemini embedding chaqiruvi
+(`gemini-embedding-2`, 3072-o'lcham) real API'ga qarshi tasdiqlandi, va
+3072-o'lchamli `vector` ustuni real Postgres'da (`CREATE TEMP TABLE`
+bilan) ishlashi tasdiqlandi (2000-o'lcham cheklovi — ko'pincha pgvector
+haqida aytiladigan — aslida faqat ivfflat INDEX cheklovi, saqlash
+cheklovi emas).
+
+Qurilgan qatlamlar: `doda.ai.embedding_port`/`embedding_factory` —
+`doda.ai.port.ModelGateway`ning bir xil "Protocol + Null fallback"
+naqshi, FAQAT Gemini uchun (Anthropic'da embedding endpoint umuman yo'q,
+OpenAI esa bu sandbox'dan hamon bloklangan — `curl`da tasdiqlandi).
+`doda.domain.knowledge.text_extraction` (TXT/PDF/DOCX/XLSX — mos
+ravishda decode/`pypdf`/`python-docx`/`openpyxl`; PNG/JPEG'ning
+extractori yo'q, `None` qaytaradi — bu xato emas, "hali indekslanmagan"
+degani) va `chunking` (sof, belgi-asosli, overlap bilan, `ai_max_context_
+chars`bilan bir xil "tokenizer shart emas" mulohazasi). `DocumentChunk`
+(migratsiya 0029) — `knowledge_documents`ning aynan bir xil RLS shakli,
+`ondelete="CASCADE"` bilan bog'langan (hujjat o'chirilganda chunk'lar
+ham avtomatik o'chadi — FR-KNW-005'ning "indeks"ga tegishli qismini
+tasodifan qamrab oladi).
+
+Indekslash `api/knowledge.py`ning `upload_document`i ichida, FAYL
+YUKLASH HTTP so'rovining O'ZIDA, sinxron ishlaydi — uchta AI chat
+gateway'i bilan bir xil "caller'ning o'z javobi shu chaqiruvga
+allaqachon bog'liq, alohida async worker yo'q" mulohazasi
+(`test_side_effect_boundary.py`ning `ALLOWED` ro'yxatiga `infrastructure/
+gemini_embedding.py` shu sabab bilan qo'shildi). Embedding kaliti
+sozlanmagan bo'lsa (`is_embedding_configured` tekshiruvi), indekslash
+shunchaki o'tkazib yuboriladi — FR-KNW-002'dan oldingi xatti-harakatning
+aynan o'zi, xato emas. Bu tekshiruv ATAYLAB qo'shildi: birinchi
+qoralamada yo'q edi, va `NullEmbeddingPort`ning o'zi (ovoz scaffolding'i
+bilan bir xil "hech qachon soxta natija qaytarma, xato ko'tar"
+intizomi bilan) chaqirilganda darhol butun test suite'ni (mavjud fayl
+yuklash testlarini, `tests/conftest.py`ning o'z autouse fixture'i AI
+kalitlarini `None`ga majburlagani uchun) buzib qo'ygan edi — bu real,
+kutilmagan regressiya edi, darhol diagnostika qilinib tuzatildi.
+
+**Haqiqiy, jiddiy xato topildi va tuzatildi — faqat pytest emas, REAL
+Gemini API'ga qarshi bir martalik tekshiruv orqali.** Avtomatlashtirilgan
+testlar (soxta `EmbeddingPort` bilan) barchasi yashil bo'lgandan keyin
+ham, "real integratsiya bajarilmagan bo'lsa PASS deb yozma" intizomiga
+rioya qilib, butun pipeline'ni (ingest_file→index_document) real
+Postgres+real Gemini'ga qarshi, pytest'dan tashqarida bir martalik
+skript bilan sinadim — va natija kutilmagan xato berdi: 2040 belgili
+matn 2 ta chunk'ga bo'lingan edi (2000+239 belgi), lekin embedding
+chaqiruvi faqat 1 ta vektor qaytardi, `zip(..., strict=True)` aniq xato
+bilan qulab tushdi.
+
+Ildiz sababni to'g'ridan-to'g'ri SDK manbasini o'qib va real chaqiruvlar
+bilan tasdiqlab topdim: `embed_content`ga `contents=` sifatida oddiy
+`list[str]` uzatish, `gemini-embedding-2` modeli uchun, SDK'ning o'z
+`t_contents` transformerida BITTA ko'p-qismli `Content` obyektiga
+aylanadi (`UserContent(parts=[Part(text='a'), Part(text='b')])`) — bu
+chat'ning BITTA ko'p-qismli BURILISHI (masalan matn+rasm) uchun
+mo'ljallangan shakl, N ta MUSTAQIL hujjat uchun emas. Real API bu
+holatda talab qilingandan KAMROQ embedding qaytarishi mumkin ekan
+(uzunroq/ko'proq qism uchun; dastlabki 2 ta QISQA test satri uchun bu
+tasodifan to'g'ri ishlagan edi — bu o'zi "qisqa, oson sinov yetarli deb
+o'ylama" darsi). Tuzatish: har bir matn uchun ALOHIDA `genai_types.
+Content(parts=[Part(text=...)])` qurish — bu real API'ga qarshi qayta
+tasdiqlandi: 2 ta matn uchun 2 ta, haqiqatda bir-biridan farqli
+(`identical vectors: False`) embedding qaytdi. Ikkinchi, mustaqil himoya
+qatlami ham qo'shildi: `embed()` endi har chaqiruvdan keyin qaytgan
+embedding soni so'ralgan matn soniga mos kelishini tekshiradi, mos
+kelmasa aniq `ModelProviderError` ko'taradi — kelajakda SDK'ning o'zi
+qayta o'zgarsa ham, bu xato sinfi jimgina qaytalanmasligi uchun. Yangi
+regressiya testi (`test_fewer_embeddings_than_texts_raises_rather_than_
+silently_misaligning`) bu ikkinchi qatlamni mustaqil tekshiradi.
+
+Testlar: `test_chunking.py` (7, sof funksiya), `test_text_extraction.py`
+(10, HAQIQIY qo'lda qurilgan minimal PDF/DOCX/XLSX fayllar bilan — FR-KNW-001'ning
+o'z fixture'laridan farqli, bu safar chindan ham parse qilinadigan
+hujjatlar kerak edi; PDF uchun xato xref jadvali bilan qurilib, pypdf'ning
+`strict=False` standart rejimining recovery-skanerlashi real tasdiqlandi),
+`test_embedding_port.py` (6), `test_gemini_embedding.py` (6, MockTransport
+orqali, real wire-shape MockTransport capture bilan tasdiqlangan —
+avval noto'g'ri taxmin qilib test yozilgan, keyin haqiqiy capture bilan
+tuzatilgan), `test_knowledge_api.py`ga 4 yangi (soxta, deterministik
+`EmbeddingPort` bilan — TXT yuklash to'g'ri lineage bilan chunk yaratishi,
+rasm yuklash 0 chunk yaratishi (xato emas), parol bilan himoyalangan PDF
+BUTUN yuklashni bekor qilishi (Document qatori HAM rollback bo'ladi —
+`index_document`ning o'zi `ingest_file`ning "storage avval" tartibidan
+FARQLI, ataylab TESKARI yo'nalish tanladi: indekslanmaydigan Document
+abadiy qolib ketmasin), va hujjatni o'chirish chunk'larni CASCADE orqali
+o'chirishi).
+
+630 test, barchasi real Postgres'da; `ruff`/`mypy src/doda` toza.
+`docs/design-proposals/FR-KNW-memory-design-notes.md` va `docs/
+risk-register.md`ning RISK-003 qatori yangilandi — blokerning o'zi
+"embedding yo'q"dan "retrieval/eval to'plami yo'q"ga ko'chdi.

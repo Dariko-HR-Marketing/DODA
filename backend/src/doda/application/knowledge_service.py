@@ -1,7 +1,12 @@
-"""FR-KNW-001: file ingest. `ingest_file` is the one function that
-validates (doda.domain.knowledge.file_validation), stores
-(doda.storage.port.ObjectStoragePort) and records (Document row) an
-upload — a caller never does any of those three steps on its own.
+"""FR-KNW-001/002: file ingest and indexing. `ingest_file` validates
+(doda.domain.knowledge.file_validation), stores (doda.storage.port.
+ObjectStoragePort) and records (Document row) an upload. `index_document`
+is the separate, explicitly-called next step (FR-KNW-002): parses,
+chunks and embeds that same upload's content into DocumentChunk rows —
+kept apart from `ingest_file` so the two can be tested and reasoned
+about independently (a Document can exist with zero chunks; that is
+never, on its own, a sign something went wrong — see index_document's
+own docstring).
 
 Ordering note (accepted, documented limitation, not a gap this task
 closes): storage happens BEFORE the Document row is inserted, so a
@@ -18,8 +23,11 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from doda.ai.embedding_port import EmbeddingPort
+from doda.domain.knowledge.chunking import chunk_text
 from doda.domain.knowledge.file_validation import storage_key_for, validate_file
-from doda.domain.knowledge.models import Document
+from doda.domain.knowledge.models import Document, DocumentChunk
+from doda.domain.knowledge.text_extraction import extract_text
 from doda.storage.port import ObjectStoragePort
 
 MAX_PAGE_SIZE = 200
@@ -61,6 +69,53 @@ async def ingest_file(
     session.add(document)
     await session.flush()
     return document
+
+
+async def index_document(
+    session: AsyncSession,
+    embedding_port: EmbeddingPort,
+    document: Document,
+    *,
+    data: bytes,
+    chunk_size: int,
+    chunk_overlap: int,
+) -> int:
+    """FR-KNW-002: parses, chunks, embeds and indexes `document`'s own
+    content. Returns the number of chunks created — 0 is a valid,
+    non-error result for a content type with no extractor yet (see
+    doda.domain.knowledge.text_extraction's own docstring), not a
+    failure. Deliberately the OPPOSITE failure-mode choice from
+    ingest_file's own "storage before DB row" ordering note above: this
+    runs in the SAME transaction as the Document insert (the caller is
+    responsible for that), so a real extraction/embedding error rolls
+    back the whole upload rather than leaving a Document that can never
+    be indexed and has no retry path — FR-KNW-008's async retry/progress
+    reporting doesn't exist yet to recover from that any other way.
+    """
+    text = extract_text(content_type=document.content_type, data=data)
+    if not text:
+        return 0
+
+    chunks = chunk_text(text, chunk_size=chunk_size, overlap=chunk_overlap)
+    if not chunks:
+        return 0
+
+    vectors = await embedding_port.embed([chunk.content for chunk in chunks])
+    for index, (chunk, vector) in enumerate(zip(chunks, vectors, strict=True)):
+        session.add(
+            DocumentChunk(
+                customer_id=document.customer_id,
+                workspace_id=document.workspace_id,
+                document_id=document.id,
+                chunk_index=index,
+                start_offset=chunk.start_offset,
+                end_offset=chunk.end_offset,
+                content=chunk.content,
+                embedding=vector,
+            )
+        )
+    await session.flush()
+    return len(chunks)
 
 
 async def list_documents_for_workspace(

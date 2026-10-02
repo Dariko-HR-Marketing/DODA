@@ -1,21 +1,78 @@
-"""End-to-end HTTP tests for the knowledge/file API — FR-KNW-001. Same
-authoritative-chain pattern as test_tasks_api.py. Storage is pointed at
-a per-test tmp_path (doda.api.knowledge.get_settings monkeypatched) so
+"""End-to-end HTTP tests for the knowledge/file API — FR-KNW-001/002.
+Same authoritative-chain pattern as test_tasks_api.py. Storage is pointed
+at a per-test tmp_path (doda.api.knowledge.get_settings monkeypatched) so
 tests never touch the real ./data/knowledge directory or share state
 across test runs.
+
+FR-KNW-002 (indexing) tests use a fake, deterministic EmbeddingPort
+(`_fake_embedding` fixture) rather than a real Gemini key — same
+discipline as test_conversations_api.py's NullModelGateway-by-default
+posture: this project's automated suite never depends on a live
+provider credential (see tests/conftest.py's own autouse fixture, which
+forces gemini_api_key to None in every test). The real, working
+end-to-end Gemini embedding call is verified separately, by hand,
+outside pytest — see CLAUDE.md's running log.
 """
 
+import io
 import uuid
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from pypdf import PdfReader, PdfWriter
+from sqlalchemy import select
 
 from doda.config import Settings
+from doda.db import tenant_scoped_session
+from doda.domain.knowledge.models import EMBEDDING_DIMENSIONS, DocumentChunk
 from doda.main import app
 from tests.integration.conftest import seed_workspace_member
 
 _REAL_PDF_BYTES = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\nreal pdf body here"
 _WINDOWS_PE_BYTES = b"MZ\x90\x00\x03\x00\x00\x00this is really an executable"
+_REAL_PNG_BYTES = b"\x89PNG\r\n\x1a\n fake but magic-byte-correct png body"
+# A hand-built, genuinely parseable (if minimal) PDF — same construction
+# as tests/unit/test_text_extraction.py's _MINIMAL_PDF_BYTES, needed here
+# to build a real encrypted PDF from a real unencrypted one (PdfWriter
+# can't encrypt a document it was never given in the first place).
+_PARSEABLE_PDF_CONTENT_STREAM = b"BT /F1 24 Tf 10 100 Td (Hello World) Tj ET"
+_PARSEABLE_PDF_BYTES = (
+    b"%PDF-1.4\n"
+    b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+    b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"
+    b"3 0 obj\n<< /Type /Page /Parent 2 0 R "
+    b"/Resources << /Font << /F1 4 0 R >> >> "
+    b"/MediaBox [0 0 200 200] /Contents 5 0 R >>\nendobj\n"
+    b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n"
+    b"5 0 obj\n<< /Length "
+    + str(len(_PARSEABLE_PDF_CONTENT_STREAM)).encode()
+    + b" >>\nstream\n"
+    + _PARSEABLE_PDF_CONTENT_STREAM
+    + b"\nendstream\nendobj\n"
+    b"trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n0\n%%EOF\n"
+)
+
+
+class _FakeEmbeddingPort:
+    """Deterministic, no-network stand-in — one fixed-dimension vector
+    per input text, in order. Records every batch it was called with so
+    tests can assert on exactly what was sent, same shape as
+    test_conversations_api.py's _RecordingGateway."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        self.calls.append(list(texts))
+        return [[float(i)] * EMBEDDING_DIMENSIONS for i, _ in enumerate(texts)]
+
+
+@pytest.fixture
+def fake_embedding(monkeypatch: pytest.MonkeyPatch) -> _FakeEmbeddingPort:
+    port = _FakeEmbeddingPort()
+    monkeypatch.setattr("doda.api.knowledge.is_embedding_configured", lambda settings: True)
+    monkeypatch.setattr("doda.api.knowledge.get_embedding_port", lambda settings: port)
+    return port
 
 
 @pytest.fixture
@@ -209,3 +266,135 @@ async def test_owner_can_delete_their_own_upload(
         headers=_auth_headers(member.session_id),
     )
     assert get_after_delete.status_code == 404
+
+
+@pytest.fixture
+def small_chunk_settings(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Settings:
+    """Deterministic, small chunk size/overlap so a short test text still
+    produces multiple, easily-asserted-on chunks."""
+    settings = Settings(  # type: ignore[call-arg]
+        knowledge_storage_dir=str(tmp_path),
+        knowledge_chunk_size_chars=50,
+        knowledge_chunk_overlap_chars=10,
+    )
+    monkeypatch.setattr("doda.api.knowledge.get_settings", lambda: settings)
+    return settings
+
+
+async def _chunks_for_document(customer_id: uuid.UUID, document_id: uuid.UUID) -> list[DocumentChunk]:
+    async with tenant_scoped_session(customer_id) as db:
+        result = await db.scalars(
+            select(DocumentChunk)
+            .where(DocumentChunk.document_id == document_id)
+            .order_by(DocumentChunk.chunk_index)
+        )
+        return list(result.all())
+
+
+async def test_uploading_a_txt_file_creates_chunks_with_correct_lineage(
+    client: AsyncClient,
+    db_available: bool,
+    small_chunk_settings: Settings,
+    fake_embedding: _FakeEmbeddingPort,
+) -> None:
+    member = await seed_workspace_member()
+    text = "A" * 120  # chunk_size=50, overlap=10 -> chunks at [0,50) [40,90) [80,120)
+
+    upload = await client.post(
+        f"/v1/workspaces/{member.workspace_id}/documents",
+        files=_upload_files("notes.txt", "text/plain", text.encode()),
+        headers=_auth_headers(member.session_id),
+    )
+    assert upload.status_code == 200
+    document_id = uuid.UUID(upload.json()["id"])
+
+    chunks = await _chunks_for_document(member.customer_id, document_id)
+    assert len(chunks) == 3
+    assert [c.chunk_index for c in chunks] == [0, 1, 2]
+    assert (chunks[0].start_offset, chunks[0].end_offset) == (0, 50)
+    assert (chunks[1].start_offset, chunks[1].end_offset) == (40, 90)
+    assert (chunks[2].start_offset, chunks[2].end_offset) == (80, 120)
+    for chunk in chunks:
+        assert chunk.content == text[chunk.start_offset : chunk.end_offset]
+        assert len(chunk.embedding) == EMBEDDING_DIMENSIONS
+        assert chunk.customer_id == member.customer_id
+        assert chunk.workspace_id == member.workspace_id
+
+    # One call, all three chunks' text in order — well under the
+    # adapter's own 100-text batch limit for a document this small.
+    assert fake_embedding.calls == [[c.content for c in chunks]]
+
+
+async def test_uploading_an_image_creates_zero_chunks_not_an_error(
+    client: AsyncClient,
+    db_available: bool,
+    storage_settings: Settings,
+    fake_embedding: _FakeEmbeddingPort,
+) -> None:
+    member = await seed_workspace_member()
+    upload = await client.post(
+        f"/v1/workspaces/{member.workspace_id}/documents",
+        files=_upload_files("photo.png", "image/png", _REAL_PNG_BYTES),
+        headers=_auth_headers(member.session_id),
+    )
+    assert upload.status_code == 200
+    document_id = uuid.UUID(upload.json()["id"])
+
+    assert await _chunks_for_document(member.customer_id, document_id) == []
+    assert fake_embedding.calls == []  # never even attempted — nothing to embed
+
+
+async def test_a_password_protected_pdf_fails_the_whole_upload_and_nothing_persists(
+    client: AsyncClient,
+    db_available: bool,
+    storage_settings: Settings,
+    fake_embedding: _FakeEmbeddingPort,
+) -> None:
+    """Passed file_validation's own magic-byte check (still starts with
+    %PDF) but cannot be parsed for text — the whole upload (Document row
+    included) rolls back rather than leaving an unindexable, un-retryable
+    Document with no chunks (see knowledge_service.index_document's own
+    docstring on this deliberate ordering choice)."""
+    writer = PdfWriter(clone_from=PdfReader(io.BytesIO(_PARSEABLE_PDF_BYTES)))
+    writer.encrypt(user_password="secret", owner_password="secret2")
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    encrypted_pdf = buffer.getvalue()
+
+    member = await seed_workspace_member()
+    upload = await client.post(
+        f"/v1/workspaces/{member.workspace_id}/documents",
+        files=_upload_files("locked.pdf", "application/pdf", encrypted_pdf),
+        headers=_auth_headers(member.session_id),
+    )
+    assert upload.status_code == 422
+    assert upload.json()["code"] == "DOCUMENT_INDEXING_FAILED"
+
+    listing = await client.get(
+        f"/v1/workspaces/{member.workspace_id}/documents", headers=_auth_headers(member.session_id)
+    )
+    assert listing.json() == []  # the Document insert was rolled back too
+
+
+async def test_deleting_a_document_cascades_to_its_chunks(
+    client: AsyncClient,
+    db_available: bool,
+    small_chunk_settings: Settings,
+    fake_embedding: _FakeEmbeddingPort,
+) -> None:
+    member = await seed_workspace_member()
+    upload = await client.post(
+        f"/v1/workspaces/{member.workspace_id}/documents",
+        files=_upload_files("notes.txt", "text/plain", b"A" * 120),
+        headers=_auth_headers(member.session_id),
+    )
+    document_id = uuid.UUID(upload.json()["id"])
+    assert len(await _chunks_for_document(member.customer_id, document_id)) == 3
+
+    delete = await client.delete(
+        f"/v1/workspaces/{member.workspace_id}/documents/{document_id}",
+        headers=_auth_headers(member.session_id),
+    )
+    assert delete.status_code == 204
+
+    assert await _chunks_for_document(member.customer_id, document_id) == []

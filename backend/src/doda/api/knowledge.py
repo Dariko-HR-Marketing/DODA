@@ -1,4 +1,4 @@
-"""Knowledge/file endpoints — FR-KNW-001 only. Same authoritative-chain
+"""Knowledge/file endpoints — FR-KNW-001/002. Same authoritative-chain
 pattern as api/tasks.py: every handler gets its tenant/authz context only
 from RequestContext, never from client-supplied customer_id/actor_id.
 """
@@ -8,10 +8,16 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 
+from doda.ai.embedding_factory import get_embedding_port, is_embedding_configured
 from doda.api.dependencies import RequestContext, get_request_context
 from doda.api.knowledge_schemas import DocumentOut
 from doda.application.authz_service import authorize_use_knowledge
-from doda.application.knowledge_service import delete_document, ingest_file, list_documents_for_workspace
+from doda.application.knowledge_service import (
+    delete_document,
+    index_document,
+    ingest_file,
+    list_documents_for_workspace,
+)
 from doda.config import get_settings
 from doda.domain.knowledge.file_validation import FileTooLargeError
 from doda.domain.knowledge.models import Document
@@ -85,6 +91,21 @@ async def upload_document(
         data=data,
         max_size_bytes=settings.knowledge_max_file_size_bytes,
     )
+    # Same "not indexed yet is not a failure" posture as an unsupported
+    # content type (see index_document's own docstring) — no embedding
+    # credential configured means uploads keep working exactly as they
+    # did before FR-KNW-002 existed, just without any DocumentChunk rows,
+    # rather than NullEmbeddingPort's EmbeddingNotConfiguredError turning
+    # every upload into a failure the moment no key is present.
+    if is_embedding_configured(settings):
+        await index_document(
+            ctx.db,
+            get_embedding_port(settings),
+            document,
+            data=data,
+            chunk_size=settings.knowledge_chunk_size_chars,
+            chunk_overlap=settings.knowledge_chunk_overlap_chars,
+        )
     return _to_document_out(document)
 
 

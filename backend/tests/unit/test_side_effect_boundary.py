@@ -80,6 +80,12 @@ ALLOWED = {
     "infrastructure/openai_gateway.py",
     "infrastructure/gemini_gateway.py",
     "infrastructure/claude_gateway.py",
+    # FR-KNW-002: embedding happens synchronously within the same file-
+    # upload HTTP request it's indexing (doda.application.knowledge_
+    # service) — same "the caller's own HTTP response is what blocks on
+    # this, no async worker to place it behind" reasoning as the three
+    # chat gateways above.
+    "infrastructure/gemini_embedding.py",
 }
 
 

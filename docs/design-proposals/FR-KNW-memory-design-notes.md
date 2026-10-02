@@ -13,14 +13,14 @@ qondirmaydi — bu hujjat har bir ID'ni alohida, TRD'ning o'z matniga
 | ID | Toifa | Holat |
 |---|---|---|
 | FR-KNW-001 | — | **Qurildi** (avvalgi sessiyada) — fayl ingest, tur/hajm/malware validatsiyasi |
-| FR-KNW-002 | C | Haqiqiy embedding chaqiruvi kerak — bloklangan |
-| FR-KNW-003 | C | FR-KNW-002'ning ustiga quriladi — bloklangan |
-| FR-KNW-004 | C | FR-KNW-002/003'ning ustiga quriladi — bloklangan |
-| FR-KNW-005 | C | FR-KNW-002'ning "indeks"i mavjud emas — bloklangan |
-| FR-KNW-006 | C | FR-KNW-002/003'ning ustiga quriladi — bloklangan |
+| FR-KNW-002 | — | **Qurildi** — Product Owner haqiqiy Gemini API kalitini taqdim etgandan keyin (bu hujjat yozilgan vaqtda ADR-008/009'ning "uchala provayder ham bloklangan" holati endi noto'g'ri — ADR-009'ning o'zi keyinroq yangilandi). Pastga qarang. |
+| FR-KNW-003 | C | Endi bitta YANGI, torroq blokerga bog'liq: eval to'plami + reranking dizayni (qabul mezoni "eval to'plamida baseline'dan yaxshi natija" — eval to'plami hali yo'q) |
+| FR-KNW-004 | C | 003'ning retrieval natijasisiz "manba"ning o'zi yo'q — endi 003'ga bog'liq, 002'ga emas |
+| FR-KNW-005 | B (qisman) | "Indeks"ning o'zi endi mavjud (002) — FK `ondelete="CASCADE"` orqali hujjat o'chirilganda chunk'lar ham avtomatik o'chadi, bu mezonning "indeks"ga tegishli yarmini qamraydi. "Blob va derived artifact"lar (cache, boshqa hosilalar) hali mavjud emas — ularning o'zi yo'q, tarqatadigan narsa yo'q. Mustaqil, alohida FR-KNW-005 ID bilan ochiq hal qilinmadi (CASCADE 002'ning o'z qurilishining tabiiy natijasi, maqsadli FR-KNW-005 ishi emas) |
+| FR-KNW-006 | C | 003/004'ning retrieval+citation natijasisiz "topilmadi" holatini simulyatsiya qilib bo'lmaydi — 003'ga bog'liq |
 | FR-KNW-007 / FR-CTL-004 | C (qisman A) | "Preference" xotira turi allaqachon boshqa ID'lar ostida qurilgan; qolgan to'rt turi (Working/Episodic/Semantic/Sensitive) yangi PO qarori kerak |
-| FR-KNW-008 | C | FR-KNW-002'ning ustiga quriladi — bloklangan |
-| FR-KNW-009 | C | FR-KNW-002'ning ustiga quriladi — bloklangan |
+| FR-KNW-008 | C | Asinxron ingest+progress — 002'ning SINXRON versiyasi qurilgandan keyin ham, bu hamon alohida ish (job-queue infratuzilmasi, FR-KNW-002'ning o'z docstring'ida ochiq qoldirilgan) |
+| FR-KNW-009 | C | Versiyalash DB darajasida mustaqil qurilishi mumkin, lekin "retrieval'dan chiqarish" 003'ning o'z mexanizmini talab qiladi — 003'ga bog'liq |
 
 Toifalar FR-ADM design-proposal hujjatining o'zi bilan bir xil: (A)
 allaqachon mavjud, faqat ID bilan bog'lash kerak edi; (B) mavjud
@@ -28,41 +28,43 @@ infratuzilma bilan kichik xavfsiz qadam; (C) yangi Product Owner/
 arxitektura qarorini yoki hali qurilmagan tashqi bog'liqlikni talab
 qiladi.
 
-## Nega FR-KNW-002..006/008/009 hammasi bitta blokerga bog'liq
+## FR-KNW-002 qurildi — zanjir endi 003'da to'xtaydi, 002'da emas
 
-TRD 3.5-bo'limining o'zi buni zanjir sifatida yozadi: **002 (parsing→
-chunking→embedding→indexing)** — bu zanjirning eng old bo'g'ini, va
-qolgan oltitasining HAR BIRI unga tayanadi:
-- **003** (gibrid retrieval: metadata+keyword+vector+reranking) — 002
-  yaratgan vektor indeksisiz "vector" qismi umuman mavjud emas.
-- **004** (citation-required rejim, groundedness eval) — 003'ning
-  retrieval natijasisiz "manba"ning o'zi yo'q.
-- **005** (o'chirish so'rovi indeks/blob/cache/derived artifactlarga
-  tarqaladi) — 002 yaratadigan "indeks" hali mavjud emas, tarqatiladigan
-  narsa yo'q.
-- **006** (manba topilmasa ochiq aytish) — 003/004'ning retrieval+
-  citation natijasisiz "topilmadi" holatini ham simulyatsiya qilib
-  bo'lmaydi (haqiqiy emas, soxta bo'lardi).
-- **008** (katta fayl uchun asinxron ingest+progress) — 002'ning o'z
-  sinxron/asinxron ingest jarayonining kengaytmasi, 002'siz mustaqil
-  ma'no yo'q.
-- **009** (hujjat versiyalanishi, eskirgan versiya retrieval'dan
-  chiqarilishi) — versiyalash DB darajasida qurilishi mumkin edi, lekin
-  "retrieval'dan chiqarish" 003'ning o'z retrieval mexanizmini talab
-  qiladi — mustaqil qurish keyin 003 qurilganda qayta ishlashga
-  majbur qilardi.
+**Bu bo'lim yozilgan vaqtda** (ushbu hujjatning birinchi versiyasi)
+FR-KNW-002 (parsing→chunking→embedding→indexing) real, ishlaydigan
+embedding chaqiruvini talab qilardi, va bu muhitning tarmoq siyosati
+uchala AI provayderning ham haqiqiy API'siga chiqishni bloklardi
+(ADR-008/ADR-009'ning o'z "honest limitation" bo'limlari). **Bu holat
+keyinroq o'zgardi**: Product Owner haqiqiy, ishlaydigan Gemini API
+kalitini taqdim etdi, va bu muhitning `generativelanguage.googleapis.com`
+ga tarmoq yo'li ham (sabab noma'lum — tashqi tomondan o'zgargan)
+alohida tekshirilib ochiq ekani tasdiqlandi. Shundan keyin FR-KNW-002
+haqiqatda, real Gemini embedding API'ga qarshi (sintetik emas) qurildi
+va tasdiqlandi — pastdagi "FR-KNW-002: qurilgan holat" bo'limiga qarang.
 
-**002'ning o'zi nega bloklangan**: real, ishlaydigan embedding
-chaqiruvi kerak (OpenAI/Gemini/Claude'ning embeddings endpoint'i yoki
-alohida embedding provayder). Bu muhitning tarmoq siyosati uchala AI
-provayderning ham haqiqiy API'siga chiqishni bloklaydi (ADR-008/
-ADR-009'ning o'z "honest limitation" bo'limlarida allaqachon
-hujjatlashtirilgan, xuddi shu cheklov) — demak embedding chaqiruvini
-qurish "tekshirib bo'lmaydigan kod yozish" bo'lardi, QOIDA 1'ning o'zi
-buni taqiqlaydi. Bundan tashqari, pgvector uchun DB sxemasi (chunk
-jadvali, embedding ustuni, indeks turi — HNSW/IVFFlat) va chunking
-strategiyasi (fixed-size vs semantic) haqiqiy Product Owner/texnik
-qarorini talab qiladi — bular ham hali so'ralmagan.
+Qurilish jarayonida **haqiqiy, jiddiy xato topildi va tuzatildi**:
+Gemini'ning `embed_content`iga `contents=` sifatida oddiy `list[str]`
+uzatish SDK'ning o'z `t_contents` transformerida BITTA ko'p-qismli
+`Content`ga aylanadi (chat'ning bitta ko'p-qismli BURILISHI uchun
+mo'ljallangan shakl, N ta mustaqil hujjat uchun emas) — va real API bu
+holatda talab qilingandan KAMROQ embedding qaytarishi mumkin ekani
+aniqlandi (2 ta 2000/239-belgili chunk uchun aynan 1 ta embedding
+qaytdi, 2 emas). Tuzatish: har bir matn uchun ALOHIDA `Content` obyekti
+qurish (`doda/infrastructure/gemini_embedding.py`ning o'z docstring'iga
+qarang) — bu real API'ga qarshi tasdiqlandi (2 ta matn uchun 2 ta,
+haqiqatda farqli embedding). Bu aynan "kichik, uzoq umr ko'radigan
+ad-hoc tekshiruv kerak" degan QOIDA 1 intizomining o'zi topib bergan
+xato — faqat avtomatlashtirilgan pytest testlari (fake embedding port
+bilan) bu xatoni hech qachon ushlay olmasdi.
+
+**Endi zanjir 003'da to'xtaydi, 002'da emas**: 003 (gibrid retrieval:
+metadata+keyword+vector+reranking) endi YANGI, torroq blokerga ega —
+"eval to'plamida baseline'dan yaxshi natija" qabul mezoni haqiqiy eval
+to'plamini talab qiladi, bu alohida, kattaroq ish (reranking dizayni +
+baseline o'lchovi). 004/006/009 shu 003'ga bog'liq bo'lib qoladi.
+005 esa 002'ning o'z CASCADE xatti-harakati tufayli QISMAN, tasodifan
+yopildi (yuqoridagi jadvalga qarang) — bu alohida, maqsadli FR-KNW-005
+ishi emas.
 
 ## FR-KNW-007 / FR-CTL-004 — Memory: qisman allaqachon qurilgan
 
@@ -124,10 +126,40 @@ qism.
 
 ## Umumiy xulosa
 
-To'qqizta FR-KNW ID'idan bittasi (001) qurilgan; oltitasi (002/003/004/
-005/006/008/009) bitta umumiy blokerga (real embedding chaqiruvi + DB
-sxema qarori) bog'liq va shu bloker yechilmaguncha ketma-ket
-qurilmaydi. FR-KNW-007/FR-CTL-004 (memory) — beshta turdan bittasi
-(Preference) allaqachon boshqa ID'lar ostida qondirilgan, qolgan
-to'rttasi ham yuqoridagi bloker bilan (Episodic/Semantic) yoki yangi,
+To'qqizta FR-KNW ID'idan ikkitasi (001, 002) qurilgan; 005 qisman,
+tasodifan (002'ning CASCADE xatti-harakati orqali) yopilgan. Qolgan
+to'rttasi (003/004/006/009) endi YANGI, torroq blokerga (eval to'plami +
+reranking dizayni, FR-KNW-003) bog'liq — avvalgi "real embedding
+chaqiruvi yo'q" blokeri endi mavjud emas. FR-KNW-008 (asinxron ingest)
+alohida, job-queue infratuzilmasi talab qiladigan ish bo'lib qoladi.
+FR-KNW-007/FR-CTL-004 (memory) — beshta turdan bittasi (Preference)
+allaqachon boshqa ID'lar ostida qondirilgan, qolgan to'rttasi ham
+yuqoridagi retrieval blokeri bilan (Episodic/Semantic) yoki yangi,
 alohida Product Owner qaroriga (Sensitive consent modeli) bog'liq.
+
+## FR-KNW-002: qurilgan holat (texnik tafsilot)
+
+`doda.ai.embedding_port`/`embedding_factory` — `doda.ai.port.
+ModelGateway`ning bir xil "Protocol + Null fallback" naqshi, FAQAT
+Gemini uchun (Anthropic'da embedding endpoint umuman yo'q, OpenAI esa
+bu sandbox'dan hamon bloklangan). `doda.domain.knowledge.text_extraction`
+(TXT/PDF/DOCX/XLSX — pypdf/python-docx/openpyxl) va `chunking` (sof,
+belgi-asosli, overlap bilan) domain qatlamida, DB/tarmoqdan mustaqil.
+`DocumentChunk` (migratsiya 0029, pgvector 0.6.0, `vector(3072)` ustuni,
+`knowledge_documents`ga `ondelete="CASCADE"` bilan bog'langan) —
+`knowledge_documents`ning aynan bir xil RLS shakli.
+
+Indekslash fayl yuklash HTTP so'rovining O'ZIDA, sinxron ishlaydi (AI
+chat gateway'lari bilan bir xil "caller'ning o'z javobi shu chaqiruvga
+bog'liq, async worker yo'q" mulohazasi) — embedding kaliti sozlanmagan
+bo'lsa, yuklash FR-KNW-002'dan oldingi xatti-harakatning aynan o'zi
+bilan davom etadi (0 ta chunk, xato emas). Rasmiy, avtomatlashtirilgan
+pytest qamrovi (`tests/unit/test_chunking.py`, `test_text_extraction.py`,
+`test_embedding_port.py`, `test_gemini_embedding.py`,
+`tests/integration/test_knowledge_api.py`) haqiqiy tarmoq/kredensialga
+bog'liq emas — soxta, deterministik `EmbeddingPort` ishlatadi (xuddi
+chat testlarining `NullModelGateway`/`_RecordingGateway` naqshi). Real,
+to'liq pipeline (ingest→chunk→embed→DB) real Postgres+real Gemini'ga
+qarshi, pytest'dan tashqarida, bir martalik skript bilan tasdiqlandi —
+2 ta chunk, to'g'ri lineage (offset 0-2000, 1800-2039), 3072-o'lchamli
+haqiqiy vektorlar.

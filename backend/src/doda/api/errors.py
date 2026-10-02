@@ -54,6 +54,7 @@ from doda.application.task_service import (
 from doda.application.workspace_service import DuplicateWorkspaceMembershipError, WorkspaceMembershipError
 from doda.domain.action.state_machine import InvalidActionTransition
 from doda.domain.knowledge.file_validation import FileValidationError
+from doda.domain.knowledge.text_extraction import DocumentIndexingError
 from doda.domain.security.decisions import Decision
 from doda.infrastructure.google_oidc_client import GoogleOidcError
 
@@ -211,6 +212,23 @@ def register_exception_handlers(app: FastAPI) -> None:
             status_code=422,
             content=_envelope(
                 code="INVALID_FILE",
+                message=str(exc),
+                trace_id=_trace_id(request),
+                retryable=False,
+            ),
+        )
+
+    @app.exception_handler(DocumentIndexingError)
+    async def _document_indexing_failed(request: Request, exc: DocumentIndexingError) -> JSONResponse:
+        # Distinct from INVALID_FILE above: the upload already passed
+        # file_validation's structural checks (and is already stored) —
+        # this is FR-KNW-002's own parsing stage finding something
+        # validation cannot see (e.g. a password-protected PDF). See
+        # DocumentIndexingError's own docstring.
+        return JSONResponse(
+            status_code=422,
+            content=_envelope(
+                code="DOCUMENT_INDEXING_FAILED",
                 message=str(exc),
                 trace_id=_trace_id(request),
                 retryable=False,

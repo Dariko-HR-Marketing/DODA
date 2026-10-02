@@ -29,6 +29,15 @@ dependencies = [
     "openai>=3.0,<4.0",
     "google-genai>=2.0,<3.0",
     "anthropic>=1.0,<2.0",
+    # FR-KNW-002: text extraction for the three parseable ingest formats
+    # (TXT needs none — a plain decode) plus pgvector's SQLAlchemy
+    # column type for the embedding storage this pipeline writes to
+    # (the `vector` Postgres extension itself was already created by
+    # migration 0001, unused until now).
+    "pypdf>=6.0,<7.0",
+    "python-docx>=1.2,<2.0",
+    "openpyxl>=3.1,<4.0",
+    "pgvector>=0.5,<0.6",
 ]
 
 [project.optional-dependencies]
