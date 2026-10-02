@@ -42,6 +42,16 @@ jobs:
         run: ruff format --check .
       - name: mypy
         run: mypy src/doda
+      # backend/scripts/*.py was previously typed-checked only by hand,
+      # ad hoc, every time this codebase's own health-check discipline
+      # happened to run it — ruff already covers this directory (no
+      # exclude in pyproject.toml), but mypy was scoped to src/doda only.
+      # These are not throwaway scripts: fire_due_reminders_job.py and
+      # promote_due_action_retries_job.py are the sole code path driving
+      # real, scheduled production behavior (see ops-jobs.yml) for
+      # FR-TASK-005/FR-ACT-005 respectively.
+      - name: mypy (scripts)
+        run: mypy scripts
 
   frontend-quality:
     name: Frontend lint + types

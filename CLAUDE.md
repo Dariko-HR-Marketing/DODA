@@ -9169,3 +9169,39 @@ tegmadi. **Natija: 0 topilma** — 4-, 6-, 7-, 9-, 10-, 11-, 13-, 14-,
 16-, 17-, 19-review'lar bilan bir xil.
 
 591 test, barchasi real Postgres'da (kod o'zgarmadi — sof tekshiruv).
+
+**14.2-bo'limning kod sifati infratuzilmasida haqiqiy, kichik bo'shliq
+topildi va yopildi: `backend/scripts/`ning o'z type-tekshiruvi CI gate
+emas edi, faqat qo'lda ishga tushiriladigan tekshiruv edi.** CI'ning
+`quality` job'ini o'qib chiqishda aniqlandi: `ruff check .`/`ruff format
+--check .` ikkalasi ham `backend/` ildizidan chaqirilgani uchun
+(`pyproject.toml`da `scripts/`ni istisno qiluvchi hech qanday
+`extend-exclude` yo'q) `scripts/`ni allaqachon qamrab olar edi, lekin
+`mypy src/doda` faqat asosiy ilova kodini tekshirardi — `scripts/`ning
+o'zi hech qachon CI'ning bir qismi bo'lmagan, faqat shu sessiyalarning
+har birida "sog'liq tekshiruvi" sifatida qo'lda (`mypy scripts/`)
+ishga tushirilgan va har safar toza chiqqan.
+
+Bu haqiqiy, ahamiyatsiz bo'shliq emas: `scripts/`dagi 13 ta fayl
+endi faqat "mustaqil monitoring skriptlari" emas —
+`fire_due_reminders_job.py` va `promote_due_action_retries_job.py`
+mos ravishda FR-TASK-005/FR-ACT-005'ning YAGONA kod yo'li bo'lib,
+`ops-jobs.yml` orqali haqiqatda rejalashtirilgan (yuqoriga qarang,
+18 ta haqiqiy eslatma yoqib yuborilgani allaqachon isbotlangan).
+Demak bu kod production xulqini haqiqatda boshqaradi, lekin uning
+tiplari hech qachon CI tomonidan avtomatik tekshirilmagan.
+
+`.github/workflows/ci.yml`ning `quality` job'iga yangi `mypy
+(scripts)` qadami qo'shildi (`mypy scripts`, `mypy src/doda`dan
+KEYIN, alohida qadam sifatida — ikkalasi mustaqil, bittasining xatosi
+ikkinchisini yashirmasin). Audit-zanjiri uslubida isbotlandi:
+`scripts/_ops_lib.py`ga vaqtincha modul darajasidagi aniq type xatosi
+(`TYPE_REGRESSION_PROBE: int = "not an int"`) kiritilib, `mypy
+scripts/` aynan kutilgan `error: Incompatible types in assignment`
+bilan muvaffaqiyatsiz bo'lishi ko'rsatildi, keyin fayl zaxira
+nusxadan tiklanib (`diff` bilan 0 farq tasdiqlab) qaytadan toza
+ekani ko'rsatildi.
+
+591 test o'zgarishsiz (sof CI-konfiguratsiya o'zgarishi, ilova kodiga
+tegilmadi); `ruff format`/`ruff check`/`mypy src/doda`/`mypy scripts/`
+barchasi toza; YAML `yaml.safe_load` bilan tasdiqlangan.
