@@ -42,6 +42,7 @@ from typing import Any
 import pydantic
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from doda.ai.embedding_factory import get_embedding_port, is_embedding_configured
 from doda.ai.types import ToolSpec
 from doda.application.action_service import (
     propose_action,
@@ -49,11 +50,15 @@ from doda.application.action_service import (
     submit_action_for_execution,
 )
 from doda.application.authz_service import WorkspaceContext
+from doda.application.knowledge_service import search_knowledge
 from doda.application.task_service import list_tasks_for_workspace
+from doda.config import Settings
 from doda.domain.action.approval import Approval
 from doda.domain.action.models import Action, RiskLevel
 from doda.domain.identity.models import ActorKind
 from doda.domain.task.models import TaskStatus
+
+_KNOWLEDGE_SEARCH_SNIPPET_CHARS = 300
 
 
 class ToolArgumentsInvalidError(Exception):
@@ -78,8 +83,16 @@ class TelegramSendMessageArgs(pydantic.BaseModel):
     text: str = pydantic.Field(max_length=4096)
 
 
+class KnowledgeSearchArgs(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+    query: str = pydantic.Field(min_length=1, max_length=500)
+    document_id: uuid.UUID | None = None
+    limit: int = pydantic.Field(default=5, ge=1, le=10)
+
+
 _READ_TOOL_ARGS: dict[str, type[pydantic.BaseModel]] = {
     "list_my_open_tasks": ListMyOpenTasksArgs,
+    "knowledge_search": KnowledgeSearchArgs,
 }
 _WRITE_TOOL_ARGS: dict[str, type[pydantic.BaseModel]] = {
     "telegram_send_message": TelegramSendMessageArgs,
@@ -109,6 +122,16 @@ def available_tool_specs() -> list[ToolSpec]:
             ),
             parameters_schema=TelegramSendMessageArgs.model_json_schema(),
         ),
+        ToolSpec(
+            name="knowledge_search",
+            description=(
+                "Search this workspace's uploaded documents for passages relevant to a query "
+                "(FR-KNW-003 hybrid retrieval). Returns the most relevant snippets, if any were "
+                "indexed; use this before answering a question that might be answered by an "
+                "uploaded file rather than general knowledge."
+            ),
+            parameters_schema=KnowledgeSearchArgs.model_json_schema(),
+        ),
     ]
 
 
@@ -125,7 +148,7 @@ def _validate_arguments(
 
 
 async def dispatch_read_tool(
-    session: AsyncSession, *, tool_name: str, arguments_json: str, workspace_id: uuid.UUID
+    session: AsyncSession, *, tool_name: str, arguments_json: str, workspace_id: uuid.UUID, settings: Settings
 ) -> str:
     """Executes immediately; returns the tool's result as a string to
     feed back to the model as a TOOL-role turn. Raises
@@ -147,6 +170,31 @@ async def dispatch_read_tool(
         if not tasks:
             return "No open tasks."
         return "\n".join(f"- [{t.status.value}] {t.title} (id={t.id})" for t in tasks)
+
+    if tool_name == "knowledge_search":
+        assert isinstance(args, KnowledgeSearchArgs)
+        # Same "tell the truth, never fake a result" posture as
+        # NullEmbeddingPort itself — reported back to the MODEL as a
+        # normal tool result (not a crash: a model calling this tool in
+        # an environment with no embedding provider configured is an
+        # expected, recoverable state, not a bug), so it can say so
+        # rather than silently acting as if no documents exist.
+        if not is_embedding_configured(settings):
+            return "Document search is not available — no embedding provider is configured."
+        chunks = await search_knowledge(
+            session,
+            get_embedding_port(settings),
+            workspace_id=workspace_id,
+            query=args.query,
+            document_id=args.document_id,
+            limit=args.limit,
+        )
+        if not chunks:
+            return "No matching documents found."
+        return "\n".join(
+            f"- (document_id={chunk.document_id}) {chunk.content[:_KNOWLEDGE_SEARCH_SNIPPET_CHARS]}"
+            for chunk in chunks
+        )
 
     raise ToolNotFoundError(tool_name)
 

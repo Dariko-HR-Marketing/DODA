@@ -60,6 +60,51 @@ test("FR-KNW-001: upload, list, download, reject, and delete a file", async ({ p
     await expect(page.getByTestId("document-list").locator("li")).toHaveCount(1);
   });
 
+  await test.step("FR-KNW-003 search: either a real hybrid-search hit or an honest not-configured error", async () => {
+    // Whether an embedding provider is configured varies by environment
+    // (CI never sets one; a developer's own .env might) — this probes
+    // the real backend directly first, then asserts the UI path that
+    // environment actually takes, rather than assuming either one.
+    const probe = await page.request.get(
+      `http://localhost:8000/v1/workspaces/${WORKSPACE_ID}/documents/search?q=test`,
+      { headers: { Authorization: `Bearer ${SESSION_ID}` } },
+    );
+
+    if (probe.status() === 503) {
+      await page.fill('input[aria-label="Fayllar ichidan qidirish"]', "anything");
+      await page.click('form:has(input[aria-label="Fayllar ichidan qidirish"]) button[type="submit"]');
+      await expect(page.getByText("embedding provayderi sozlanmagan")).toBeVisible();
+      return;
+    }
+
+    // Embedding IS configured here — a genuinely plain-text upload (the
+    // .pdf uploaded above has no real PDF structure past its magic
+    // bytes, so FR-KNW-002's extractor finds no text in it and it was
+    // never indexed; a .txt needs no parser and always is).
+    const needle = "e2e-retrieval-needle-7731";
+    await page.setInputFiles('input[aria-label="Yuklanadigan fayl"]', {
+      name: "searchable.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from(`This note mentions ${needle} for the search test.`),
+    });
+    await page.click('form:has(input[aria-label="Yuklanadigan fayl"]) button[type="submit"]');
+    await expect(page.getByTestId("document-list").getByText("searchable.txt")).toBeVisible();
+
+    await page.fill('input[aria-label="Fayllar ichidan qidirish"]', needle);
+    await page.click('form:has(input[aria-label="Fayllar ichidan qidirish"]) button[type="submit"]');
+    await expect(page.getByTestId("document-search-results")).toContainText(needle);
+    await page.click("text=Tozalash");
+    await expect(page.getByTestId("document-search-results")).toHaveCount(0);
+
+    await page
+      .getByTestId("document-list")
+      .locator("li")
+      .filter({ hasText: "searchable.txt" })
+      .getByText("O'chirish")
+      .click();
+    await expect(page.getByTestId("document-list").getByText("searchable.txt")).toHaveCount(0);
+  });
+
   await test.step("delete removes it from the list", async () => {
     await page.getByTestId("document-list").getByText("O'chirish").click();
     await expect(page.getByTestId("document-list").getByText("Hali fayl yo'q.")).toBeVisible();
@@ -68,6 +113,8 @@ test("FR-KNW-001: upload, list, download, reject, and delete a file", async ({ p
   // The rejected-upload step above causes the browser to log the 422
   // response to console (a failed fetch, same as auditor.spec.ts's
   // expected-403 case) — that one line is expected, anything else is not.
-  const unexpected = consoleErrors.filter((text) => !text.includes("422"));
+  // A 503 from the search step (no embedding provider configured) is the
+  // same kind of expected, non-UI-breaking failed fetch.
+  const unexpected = consoleErrors.filter((text) => !text.includes("422") && !text.includes("503"));
   expect(unexpected).toEqual([]);
 });

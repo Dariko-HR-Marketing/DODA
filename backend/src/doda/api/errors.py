@@ -12,6 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from doda.ai.capabilities import UnsupportedModelCapabilityError
+from doda.ai.embedding_port import EmbeddingNotConfiguredError
 from doda.ai.errors import (
     BudgetExceededError,
     ModelAuthenticationError,
@@ -528,6 +529,18 @@ def register_exception_handlers(app: FastAPI) -> None:
             content=_envelope(
                 code="AI_PROVIDER_NOT_CONFIGURED",
                 message="Tanlangan AI provayder sozlanmagan.",
+                trace_id=_trace_id(request),
+                retryable=False,
+            ),
+        )
+
+    @app.exception_handler(EmbeddingNotConfiguredError)
+    async def _embedding_not_configured(request: Request, exc: EmbeddingNotConfiguredError) -> JSONResponse:
+        return JSONResponse(
+            status_code=503,
+            content=_envelope(
+                code="EMBEDDING_NOT_CONFIGURED",
+                message="Hujjat qidiruvi uchun embedding provayderi sozlanmagan.",
                 trace_id=_trace_id(request),
                 retryable=False,
             ),

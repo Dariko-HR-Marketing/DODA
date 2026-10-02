@@ -34,9 +34,11 @@ import {
   recordTaskDecision,
   removeWorkspaceMember,
   requestTaskReminder,
+  searchDocuments,
   uploadDocument,
   type ActionOut,
   type AuditEventOut,
+  type DocumentChunkOut,
   type DocumentOut,
   type KillSwitchStatusOut,
   type NotificationOut,
@@ -116,6 +118,9 @@ export default function WorkspacePage() {
   const [uploadingDocument, setUploadingDocument] = useState(false);
   const [deletingDocumentId, setDeletingDocumentId] = useState<string | null>(null);
   const documentFileInputRef = useRef<HTMLInputElement>(null);
+  const [documentSearchQuery, setDocumentSearchQuery] = useState("");
+  const [documentSearchResults, setDocumentSearchResults] = useState<DocumentChunkOut[] | null>(null);
+  const [searchingDocuments, setSearchingDocuments] = useState(false);
 
   const refresh = useCallback(() => {
     if (sessionId === null) return;
@@ -207,6 +212,26 @@ export default function WorkspacePage() {
     } finally {
       setDeletingDocumentId(null);
     }
+  }
+
+  async function handleSearchDocuments(event: FormEvent) {
+    event.preventDefault();
+    if (sessionId === null || searchingDocuments || documentSearchQuery.trim() === "") return;
+    setSearchingDocuments(true);
+    try {
+      setDocumentSearchResults(await searchDocuments(sessionId, workspaceId, documentSearchQuery));
+    } catch (err) {
+      // FR-KNW-003: no embedding provider configured surfaces its own
+      // clear 503 message here, not a generic failure.
+      setError(err instanceof ApiError ? err.message : "Qidiruvni bajarib bo'lmadi.");
+    } finally {
+      setSearchingDocuments(false);
+    }
+  }
+
+  function handleClearDocumentSearch() {
+    setDocumentSearchQuery("");
+    setDocumentSearchResults(null);
   }
 
   async function handleCancelAction(action: ActionOut) {
@@ -843,6 +868,40 @@ export default function WorkspacePage() {
             Yuklash
           </button>
         </form>
+        <form onSubmit={handleSearchDocuments} className="mb-3 flex items-center gap-2">
+          <input
+            type="text"
+            value={documentSearchQuery}
+            onChange={(e) => setDocumentSearchQuery(e.target.value)}
+            placeholder="Fayllar ichidan qidirish..."
+            aria-label="Fayllar ichidan qidirish"
+            className="w-64 rounded-md border border-gray-300 px-2 py-1 text-sm"
+          />
+          <button
+            type="submit"
+            disabled={searchingDocuments || documentSearchQuery.trim() === ""}
+            className="rounded-md bg-gray-600 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+          >
+            Qidirish
+          </button>
+          {documentSearchResults !== null && (
+            <button type="button" onClick={handleClearDocumentSearch} className="text-xs text-blue-600 hover:underline">
+              Tozalash
+            </button>
+          )}
+        </form>
+        {documentSearchResults !== null && (
+          <ul data-testid="document-search-results" className="mb-4 space-y-2">
+            {documentSearchResults.map((chunk) => (
+              <li key={chunk.id} className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm">
+                {chunk.content}
+              </li>
+            ))}
+            {documentSearchResults.length === 0 && (
+              <li className="text-sm text-gray-500">Hech narsa topilmadi.</li>
+            )}
+          </ul>
+        )}
         <ul data-testid="document-list" className="space-y-2">
           {documents?.map((doc) => (
             <li

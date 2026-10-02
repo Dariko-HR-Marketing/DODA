@@ -9399,3 +9399,139 @@ o'chirishi).
 `docs/design-proposals/FR-KNW-memory-design-notes.md` va `docs/
 risk-register.md`ning RISK-003 qatori yangilandi — blokerning o'zi
 "embedding yo'q"dan "retrieval/eval to'plami yo'q"ga ko'chdi.
+
+**FR-KNW-003 (Gibrid retrieval: metadata filter + keyword + vector +
+reranking, Must) qurildi — FR-KNW-002'ning o'zi ochgan yagona blokerni
+yopib.** TRD 3.5'ning o'z qabul mezoni — "Eval to'plamida baseline
+retrieval'dan yaxshi natija" — ikkiga ajratildi: mexanizmning o'zi
+(reranking) hech qanday eval to'plamga bog'liq emas, chunki Reciprocal
+Rank Fusion (Cormack, Clarke & Buettcher, 2009) deterministik, ML'siz
+algoritm — faqat uning RETRIEVAL SIFATIGA ta'sirini isbotlash eval
+talab qiladi. Shu farq asosida ikkalasi ham qurildi, lekin alohida: RRF
+avval sof, DB'siz unit test bilan (`tests/unit/test_retrieval.py`, 6
+test), keyin butun zanjir real Postgres+real Gemini'ga qarshi.
+
+`doda.domain.knowledge.retrieval.reciprocal_rank_fusion` — har bir
+ranking ro'yxatidan `1/(k+rank)` qo'shib ikkita (yoki undan ko'p)
+mustaqil ranking'ni birlashtiradi; `RRF_K=60` original maqoladan,
+ataylab bu kod bazasining o'z ma'lumotiga moslab "tuning" qilinmagan
+(bunday kichik eval to'plamda moslashtirish overfitting bo'lar edi).
+
+`doda.application.knowledge_service.search_knowledge` — ikkita mustaqil
+"leg": (1) keyword — `DocumentChunk.content.ilike(...)`, so'rovning har
+bir >=3 belgili so'zi bo'yicha (FR-CONV-006'ning `search_messages_in_
+workspace`bilan bir xil LIKE-escape intizomi, lekin butun-ibora emas,
+so'z-so'z — bilim bazasi so'rovi kamdan-kam aniq substring bo'ladi,
+chat-tarix qidiruvidan farqli), nechta DISTINCT so'z mos kelgani bo'yicha
+saralangan (`sum()`ning mypy union-type muammosi — `test_knowledge_api.py`
+atrofida avvalroq ko'rilgan `sum()`+`.desc()` ziddiyatining aynan o'zi —
+aniq fold bilan chetlab o'tildi); (2) vector — pgvector'ning
+`DocumentChunk.embedding.cosine_distance(...)` komparatori orqali
+(canonical API, to'g'ridan-to'g'ri `order_by()`da ishlatiladigan).
+`document_id` — FR-KNW-003'ning "metadata filter" qismi. Ikkala leg ham
+`candidate_pool = max(limit*4, 20)` natija qaytaradi (caller'ning o'z
+`limit`idan kengroq — RRF ikkala legdan ham material topishi uchun,
+aks holda faqat ko'proq qator qaytargan leg'ni qayta tartiblagan
+bo'lardi). Workspace chegarasi aniq `DocumentChunk.workspace_id ==
+workspace_id` predikati (RLS'ning o'ziga tayanmasdan — RLS faqat
+`customer_id`ni biladi, 6.2/NFR-ISO-002'ning o'zi talab qilgan ikkinchi
+qatlam, bu kod bazasida allaqachon bir necha marta takrorlangan naqsh).
+
+`GET /v1/workspaces/{id}/documents/search?q=...&document_id=...&limit=...`
+— `{document_id}` route'idan OLDIN ro'yxatdan o'tkazilishi SHART edi
+(Starlette registratsiya tartibida moslashtiradi, FR-TASK-002'ning o'z
+`/plan` darsining to'g'ridan-to'g'ri takrori). Bu taxmin emas, isbotlandi:
+route'larni vaqtincha almashtirib (`git checkout -- <fayl>` o'rniga,
+auto-mode classifier buni to'g'ri rad etgani uchun, aniq `Edit` bilan
+qo'lda qaytarib), 3 ta yangi test aynan kutilgan 422 bilan (`http.route`
+trace atributi noto'g'ri route'ni ko'rsatib) muvaffaqiyatsiz bo'lishi
+ko'rsatildi, keyin to'g'ri tartibga qaytarib yashil ekani tasdiqlandi.
+Embedding sozlanmagan bo'lsa `EmbeddingNotConfiguredError` → 503
+`EMBEDDING_NOT_CONFIGURED` (`ModelNotConfiguredError`ning
+`AI_PROVIDER_NOT_CONFIGURED`si bilan bir xil naqsh, `api/errors.py`).
+
+**Chat'ga ulanish**: yangi `knowledge_search` READ tool (`ai_tools.py`)
+— model so'rasa darhol bajariladi, approval zanjiri shart emas (faqat
+o'qish). `dispatch_read_tool`'ning signaturasiga yangi, MAJBURIY
+`settings: Settings` parametri qo'shildi (embedding provider qurish
+uchun) — bu mavjud barcha chaqiruvchilarni (5 ta test fayli +
+`conversation_service.stream_message`ning o'zi) yangilashni talab qildi,
+mypy orqali to'liq tasdiqlangan (xuddi `propose_action`ning `actor_kind`
+majburiy qilinishi FR-AUTH-009 bypass'ini yopgandagi kabi — yangi
+majburiy parametr qo'shish, default qoldirish o'rniga, kelajakdagi
+chaqiruvchilarning uni unutib qo'yishining oldini oladi). Embedding
+sozlanmagan bo'lsa tool oddiy matn qaytaradi ("Document search is not
+available..."), xato ko'tarmaydi — model uchun bu kutilgan, tiklanadigan
+holat (`NullEmbeddingPort`ning "hech qachon soxta natija bermaslik"
+falsafasining tool-natija darajasidagi davomi).
+
+**Testlash jarayonida haqiqiy xato o'zida topildi va tuzatildi, push
+qilinmasdan oldin**: `test_ai_tools.py`ga qo'shilgan
+`_TEST_SETTINGS = Settings()` MODUL DARAJASIDA (import vaqtida)
+qurilgan edi — lekin `tests/conftest.py`ning o'z autouse fixture'i
+(AI kalitlarini har bir TEST uchun `None`ga majburlaydi) faqat test
+BAJARILISHI paytida ishlaydi, import/collection vaqtida emas. Demak bu
+modul-darajasidagi singleton bu sandbox'ning HAQIQIY, `.env`dagi
+Gemini kalitini ushlab qolgan edi — `test_knowledge_search_tool_
+reports_plainly_when_no_embedding_provider_is_configured` kutilgan
+"not available" o'rniga "No matching documents found." bilan
+muvaffaqiyatsiz bo'ldi. Bu aynan `tests/conftest.py`ning o'z
+docstring'i ogohlantirgan xato sinfining yana bir nusxasi edi — faqat
+bu safar modul-darajasidagi o'zgaruvchi, oddiy test funksiyasi emas.
+Tuzatish: `_test_settings()` funksiyasiga o'zgartirildi — har safar
+YANGI `Settings()` quradi, shuning uchun autouse fixture'ning patch'i
+har doim kuchda bo'ladi.
+
+**Eval harness** (`backend/scripts/retrieval_eval.py`) — FR-KNW-003'ning
+o'z qabul mezonini REAL Gemini embedding'ga qarshi isbotlaydi, boshqa
+mustaqil skriptlar (`run_ai_eval_suite.py`, `load_test_api.py`) bilan
+bir xil "pytest emas, qo'lda ishga tushiriladigan, halol chegarali"
+turkum. Hybrid (`search_knowledge`) vs vektor-yagona baseline (xuddi
+shu vektor so'rovi, keyword/RRF'siz) solishtiriladi. Eval to'plami
+atayin "yaqin-dublikat" stsenariysi atrofida qurildi: ikkita hujjat bir
+xil gap tuzilishi/lug'at bilan, lekin FARQLI aniq kod (`ERRCODE-7731`
+vs `ERRCODE-9912`) — bu embedding-modellarning haqiqiy, hujjatlashtirilgan
+zaifligi: ikkita ko'rinmagan alfanumerik kodni faqat kontekstdan
+farqlash prinsipial jihatdan mumkin emas, keyword leg esa xom matnni
+solishtiradi. Birinchi qoralama (oddiy "rare code vs topical distractor")
+real Gemini'ga qarshi ishga tushirilganda faqat TENG natija berdi
+(MRR 1.000 = 1.000) — bu "yaxshi natija" mezonini qondirmas edi, shuning
+uchun eval to'plami kuchaytirilib (aynan shu yaqin-dublikat decoy
+qo'shilib) qayta ishga tushirildi. **Haqiqiy natija** (real Gemini
+embedding bilan, ikki marta ketma-ket takrorlanib tasdiqlangan): hybrid
+MRR=1.000, baseline MRR=0.875 — parafraz so'rovda (`"qanday xato kodi
+logda ko'rsatilgan"`) vector-only to'g'ri hujjatni 2-o'ringa qo'ygan,
+hybrid esa 1-o'ringa. Qolgan uchta so'rovda ikkalasi ham teng — bu halol
+yozildi, kichik eval to'plamida har bir so'rov emas, faqat aniq shu
+stsenariy hybrid'ning ustunligini ko'rsatadi.
+
+**Frontend**: workspace sahifasining "Fayllar" bo'limiga qidiruv formasi
++ natijalar ro'yxati qo'shildi. Yangi E2E qadam (`knowledge.spec.ts`)
+muhitni OLDINDAN `page.request.get` bilan probe qiladi va haqiqiy
+holatga qarab filiallanadi (CI hech qachon embedding kaliti o'rnatmagani
+uchun u yerda doim 503-filial; real kalit mavjud muhitda 200-filial).
+Bu safar E2E darajasida HAQIQIY, kutilmagan muhit-drift xatosi aniqlandi:
+bu sandbox'ning `.env`i Gemini kalitiga ega bo'lgani uchun FR-KNW-001
+davridan qolgan ikkita sintetik "PDF" fixture (`knowledge.spec.ts`ning
+"report.pdf", `task-attachments.spec.ts`ning "evidence.pdf" — ikkalasi
+ham faqat magic byte header, haqiqiy PDF struktura yo'q) endi
+`extract_text`'ning haqiqiy `PdfStreamError`iga uchrab, BUTUN yuklashni
+bekor qila boshladi — bu ikki testning o'zi ilgari "embedding sozlanmagan,
+`index_document` chaqirilmaydi" holatiga tasodifan tayangan edi. Bu
+FR-KNW-003'ning o'zi yaratgan xato EMAS (CI hech qachon embedding
+kaliti o'rnatmaydi, demak CI'ning o'z tekshiruvi buzilmagan holda
+qoladi) — bu sandbox muhitining CI'dan drift qilgani (endi real
+kalitlarga ega) sababli ko'ringan, minimal-diff doirasidan tashqarida
+qoldirilgan, aniq hujjatlashtirilgan topilma (`FR-KNW-memory-design-
+notes.md`da batafsil). Buni tekshirish uchun `.env`dagi uchta AI
+kalitini vaqtincha (backup olib, keyin aniq `diff` bilan tasdiqlab
+qaytarib) olib tashlab, CI'ning aynan holatini simulyatsiya qilindi —
+shu holatda barcha 17 E2E spec (yangi qidiruv qadami bilan birga)
+yashil, real kalit qaytarilgandan keyin ham 10/13 (3tasi yuqoridagi
+pre-existing drift sababli) yashil ekani alohida-alohida tasdiqlandi.
+
+646 test (backend, 630+16: FR-KNW-003'ning o'zi uchun 6 unit — RRF — va
+10 integration/HTTP — search_knowledge, HTTP endpoint, ai_tools),
+barchasi real Postgres'da; `ruff`/`mypy src/doda`/`mypy scripts/` toza;
+frontend `tsc --noEmit`/ESLint toza, production build muvaffaqiyatli;
+barcha 17 E2E spec (CI'ning haqiqiy, embedding-kalitisiz holatida) yashil.

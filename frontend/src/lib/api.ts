@@ -1156,6 +1156,22 @@ export function deleteDocument(sessionId: string, workspaceId: string, documentI
   return apiFetch(`/v1/workspaces/${workspaceId}/documents/${documentId}`, sessionId, { method: "DELETE" });
 }
 
+// ---- FR-KNW-003 hybrid retrieval ----
+
+export interface DocumentChunkOut {
+  id: string;
+  document_id: string;
+  content: string;
+}
+
+export function searchDocuments(
+  sessionId: string,
+  workspaceId: string,
+  query: string,
+): Promise<DocumentChunkOut[]> {
+  return apiFetch(`/v1/workspaces/${workspaceId}/documents/search?q=${encodeURIComponent(query)}`, sessionId);
+}
+
 // ---- browser-side download helper (FR-CTL-002 export, FR-AUD-005 evidence
 // package, FR-KNW-001 file download) ----
 

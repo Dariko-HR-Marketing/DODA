@@ -398,3 +398,90 @@ async def test_deleting_a_document_cascades_to_its_chunks(
     assert delete.status_code == 204
 
     assert await _chunks_for_document(member.customer_id, document_id) == []
+
+
+async def test_search_without_an_embedding_provider_returns_a_clear_503(
+    client: AsyncClient, db_available: bool, storage_settings: Settings
+) -> None:
+    """No `fake_embedding` fixture here — `storage_settings` alone leaves
+    is_embedding_configured reading the real (test-forced-to-None, see
+    tests/conftest.py) gemini_api_key, same posture upload_document
+    already has for indexing."""
+    member = await seed_workspace_member()
+    response = await client.get(
+        f"/v1/workspaces/{member.workspace_id}/documents/search",
+        params={"q": "anything"},
+        headers=_auth_headers(member.session_id),
+    )
+    assert response.status_code == 503
+    assert response.json()["code"] == "EMBEDDING_NOT_CONFIGURED"
+
+
+async def test_search_never_returns_a_sibling_workspaces_content(
+    client: AsyncClient,
+    db_available: bool,
+    small_chunk_settings: Settings,
+    fake_embedding: _FakeEmbeddingPort,
+) -> None:
+    """The HTTP-level counterpart of test_knowledge_search.py's own
+    cross-workspace test: the keyword leg (real ILIKE, unlike the fake
+    vector leg) is what actually proves this here — a workspace member
+    searching for a literal word from a SIBLING workspace's content
+    (same customer, RLS alone would not stop this) must never see it."""
+    member_a = await seed_workspace_member()
+    member_b = await seed_workspace_member()
+
+    needle = "incident-report-zx91"
+    await client.post(
+        f"/v1/workspaces/{member_b.workspace_id}/documents",
+        files=_upload_files("secret.txt", "text/plain", f"confidential {needle} details".encode()),
+        headers=_auth_headers(member_b.session_id),
+    )
+
+    response = await client.get(
+        f"/v1/workspaces/{member_a.workspace_id}/documents/search",
+        params={"q": needle},
+        headers=_auth_headers(member_a.session_id),
+    )
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+async def test_search_finds_matching_content_and_the_document_id_filter_narrows_it(
+    client: AsyncClient,
+    db_available: bool,
+    small_chunk_settings: Settings,
+    fake_embedding: _FakeEmbeddingPort,
+) -> None:
+    member = await seed_workspace_member()
+    needle = "quarterly-budget-report"
+
+    upload_a = await client.post(
+        f"/v1/workspaces/{member.workspace_id}/documents",
+        files=_upload_files("a.txt", "text/plain", f"the {needle} is attached".encode()),
+        headers=_auth_headers(member.session_id),
+    )
+    document_a_id = upload_a.json()["id"]
+    upload_b = await client.post(
+        f"/v1/workspaces/{member.workspace_id}/documents",
+        files=_upload_files("b.txt", "text/plain", f"also mentions {needle} here".encode()),
+        headers=_auth_headers(member.session_id),
+    )
+    document_b_id = upload_b.json()["id"]
+
+    unfiltered = await client.get(
+        f"/v1/workspaces/{member.workspace_id}/documents/search",
+        params={"q": needle},
+        headers=_auth_headers(member.session_id),
+    )
+    assert unfiltered.status_code == 200
+    found_document_ids = {chunk["document_id"] for chunk in unfiltered.json()}
+    assert {document_a_id, document_b_id} <= found_document_ids
+
+    filtered = await client.get(
+        f"/v1/workspaces/{member.workspace_id}/documents/search",
+        params={"q": needle, "document_id": document_a_id},
+        headers=_auth_headers(member.session_id),
+    )
+    assert filtered.status_code == 200
+    assert {chunk["document_id"] for chunk in filtered.json()} == {document_a_id}

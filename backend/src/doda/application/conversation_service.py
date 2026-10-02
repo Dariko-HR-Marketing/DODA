@@ -666,6 +666,7 @@ async def stream_message(
                                 tool_name=call.name,
                                 arguments_json=call.arguments_json,
                                 workspace_id=workspace_context.workspace_id,
+                                settings=settings,
                             )
                         except Exception as exc:  # ToolArgumentsInvalidError/ToolNotFoundError
                             result_text = f"Tool error: {exc}"

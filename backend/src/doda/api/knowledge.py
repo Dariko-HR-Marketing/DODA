@@ -9,14 +9,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 
 from doda.ai.embedding_factory import get_embedding_port, is_embedding_configured
+from doda.ai.embedding_port import EmbeddingNotConfiguredError
 from doda.api.dependencies import RequestContext, get_request_context
-from doda.api.knowledge_schemas import DocumentOut
+from doda.api.knowledge_schemas import DocumentChunkOut, DocumentOut
 from doda.application.authz_service import authorize_use_knowledge
 from doda.application.knowledge_service import (
     delete_document,
     index_document,
     ingest_file,
     list_documents_for_workspace,
+    search_knowledge,
 )
 from doda.config import get_settings
 from doda.domain.knowledge.file_validation import FileTooLargeError
@@ -117,6 +119,37 @@ async def list_workspace_documents(
         ctx.db, workspace_id=ctx.workspace.workspace_id, limit=limit
     )
     return [_to_document_out(document) for document in documents]
+
+
+@router.get("/v1/workspaces/{workspace_id}/documents/search", response_model=list[DocumentChunkOut])
+async def search_workspace_documents(
+    q: str = Query(default=""),
+    document_id: uuid.UUID | None = Query(default=None),
+    limit: int = Query(default=5, le=20),
+    ctx: RequestContext = Depends(get_request_context),
+) -> list[DocumentChunkOut]:
+    """FR-KNW-003. Registered BEFORE the `{document_id}` route below —
+    Starlette matches routes in registration order, not by specificity
+    (the same lesson FR-TASK-002's `/plan` route already taught this
+    codebase), so this must come first or "search" would be parsed as
+    an (invalid) document_id and 422 instead of running."""
+    settings = get_settings()
+    if not is_embedding_configured(settings):
+        raise EmbeddingNotConfiguredError(
+            "Hech qanday embedding provayderi sozlanmagan (hozircha faqat Gemini qo'llab-quvvatlanadi)."
+        )
+    chunks = await search_knowledge(
+        ctx.db,
+        get_embedding_port(settings),
+        workspace_id=ctx.workspace.workspace_id,
+        query=q,
+        document_id=document_id,
+        limit=limit,
+    )
+    return [
+        DocumentChunkOut(id=chunk.id, document_id=chunk.document_id, content=chunk.content)
+        for chunk in chunks
+    ]
 
 
 @router.get("/v1/workspaces/{workspace_id}/documents/{document_id}", response_model=DocumentOut)
