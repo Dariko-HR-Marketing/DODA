@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from doda.domain.action.models import Action
 from doda.domain.customer.models import Customer, CustomerMembership
-from doda.domain.identity.models import AuthStrength
+from doda.domain.identity.models import ActorKind, AuthStrength
 from doda.domain.security.decisions import Decision
 from doda.domain.security.roles import (
     ROLES_THAT_MAY_APPROVE_ANOTHER_ACTORS_ACTION,
@@ -136,7 +136,7 @@ def authorize_propose_action(context: WorkspaceContext) -> None:
 
 
 def authorize_consume_approval(
-    context: WorkspaceContext, action: Action, *, auth_strength: AuthStrength
+    context: WorkspaceContext, action: Action, *, auth_strength: AuthStrength, actor_kind: ActorKind
 ) -> None:
     """9.1: R3's approver is 'the user themself' under fresh MFA; a
     WorkspaceRole.WORKSPACE_ADMIN may additionally approve someone else's
@@ -144,7 +144,18 @@ def authorize_consume_approval(
     Member/WorkspaceAdmin/CustomerOwner alike — a CustomerOwner already
     resolves as WORKSPACE_ADMIN here, see get_workspace_context). Auditor
     can never approve, full stop.
+
+    2.2's own invariant box — "Service Actor hech qachon approval bera
+    olmaydi" — is checked first, unconditionally, before role or
+    self-approval: a Service Actor's CustomerMembership role is plain
+    MEMBER (see ActorKind's docstring), so without this check a Service
+    Actor approving its *own* proposed action would sail straight through
+    the is_self_approval branch below. This is an absolute prohibition,
+    not merely "requires a role it doesn't have".
     """
+    if actor_kind is ActorKind.SERVICE:
+        raise AuthorizationError(Decision.DENY, "a service actor may never consume an approval (FR-AUTH-009)")
+
     is_self_approval = action.actor_id == f"user:{context.user_id}"
     if not is_self_approval and context.role not in ROLES_THAT_MAY_APPROVE_ANOTHER_ACTORS_ACTION:
         raise AuthorizationError(Decision.DENY, f"role {context.role.value} may not approve this action")
@@ -191,6 +202,18 @@ def authorize_use_chat(context: WorkspaceContext) -> None:
     require re-deriving which function covers which row)."""
     if context.role not in (WorkspaceRole.MEMBER, WorkspaceRole.WORKSPACE_ADMIN):
         raise AuthorizationError(Decision.DENY, f"role {context.role.value} may not use chat")
+
+
+def authorize_use_knowledge(context: WorkspaceContext) -> None:
+    """FR-KNW has no dedicated 10.2 row — this mirrors authorize_use_chat/
+    authorize_create_task's three roles (Member/WorkspaceAdmin, plus
+    CustomerOwner resolving to WORKSPACE_ADMIN — see get_workspace_context)
+    since file upload/list/download is the same kind of everyday,
+    non-privileged workspace activity those two already cover, written
+    as its own explicit check so a future FR-KNW-specific role split
+    doesn't require re-deriving which function covers which row."""
+    if context.role not in (WorkspaceRole.MEMBER, WorkspaceRole.WORKSPACE_ADMIN):
+        raise AuthorizationError(Decision.DENY, f"role {context.role.value} may not use knowledge/files")
 
 
 def authorize_manage_workspace_members(context: WorkspaceContext) -> None:
@@ -312,6 +335,16 @@ def authorize_view_archived_workspaces(context: CustomerContext) -> None:
         raise AuthorizationError(Decision.DENY, f"role {context.role.value} may not view archived workspaces")
 
 
+def authorize_manage_service_actors(context: CustomerContext) -> None:
+    """FR-AUTH-009: minting/listing/revoking a machine credential is a
+    customer-wide capability with no dedicated 10.2 row, so it follows the
+    same CustomerOwner-only precedent as kill switch/audit/archived-
+    workspace visibility above — a credential is scoped to the whole
+    customer, not any one workspace."""
+    if context.role is not CustomerRole.CUSTOMER_OWNER:
+        raise AuthorizationError(Decision.DENY, f"role {context.role.value} may not manage service actors")
+
+
 def authorize_manage_ai_provider_settings(context: CustomerContext) -> None:
     """No 10.2 row names AI provider settings directly (they didn't exist
     when that matrix was written) — follows the same restrictiveness as
@@ -336,6 +369,17 @@ def authorize_view_ai_budget(context: CustomerContext) -> None:
     tracked per customer-month, not per workspace."""
     if context.role not in (CustomerRole.CUSTOMER_OWNER, CustomerRole.AUDITOR):
         raise AuthorizationError(Decision.DENY, f"role {context.role.value} may not view the AI budget")
+
+
+def authorize_manage_ai_budget(context: CustomerContext) -> None:
+    """FR-ADM-005: SETTING the customer's own AI budget caps is a
+    higher-trust act than viewing them (authorize_view_ai_budget above,
+    which also lets Auditor read them) — Auditor is explicitly read-only
+    by design (2.2), so this is CustomerOwner-only, the same
+    restrictiveness as authorize_manage_ai_provider_settings: it affects
+    every workspace under the customer, not just the caller's own."""
+    if context.role is not CustomerRole.CUSTOMER_OWNER:
+        raise AuthorizationError(Decision.DENY, f"role {context.role.value} may not manage the AI budget")
 
 
 def authorize_manage_workspace_ai_preference(context: WorkspaceContext) -> None:

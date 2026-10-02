@@ -40,6 +40,23 @@ def _configured_settings(**overrides: object) -> Settings:
     return Settings(**defaults)  # type: ignore[arg-type]
 
 
+async def _google_login(client: AsyncClient, *, code: str, user_agent: str) -> uuid.UUID:
+    """Drives the real /login -> /callback redirect handoff (state cookie,
+    then a server-side redirect carrying session_id) end to end — shared by
+    every FR-AUTH-007 test below, each of which needs to simulate a login
+    from a specific user_agent and get back the resulting session id."""
+    login_response = await client.get("/v1/auth/google/login")
+    state = parse_qs(urlparse(login_response.headers["location"]).query)["state"][0]
+    callback_response = await client.get(
+        "/v1/auth/google/callback",
+        params={"code": code, "state": state},
+        headers={"User-Agent": user_agent},
+    )
+    assert callback_response.status_code == 307
+    query = parse_qs(urlparse(callback_response.headers["location"]).query)
+    return uuid.UUID(query["session_id"][0])
+
+
 async def test_google_login_when_not_configured_returns_503(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -177,21 +194,9 @@ async def test_a_new_device_login_creates_exactly_one_security_alert_per_custome
 
     monkeypatch.setattr("doda.application.oidc_login_service.login_with_google", fake_login_with_google)
 
-    async def _google_login(*, code: str, user_agent: str) -> uuid.UUID:
-        login_response = await client.get("/v1/auth/google/login")
-        state = parse_qs(urlparse(login_response.headers["location"]).query)["state"][0]
-        callback_response = await client.get(
-            "/v1/auth/google/callback",
-            params={"code": code, "state": state},
-            headers={"User-Agent": user_agent},
-        )
-        assert callback_response.status_code == 307
-        query = parse_qs(urlparse(callback_response.headers["location"]).query)
-        return uuid.UUID(query["session_id"][0])
-
     # First-ever login: no prior session to compare against, so this must
     # not be flagged even though there's no customer to notify yet either.
-    session1_id = await _google_login(code="code-1", user_agent="Mozilla/BrowserA")
+    session1_id = await _google_login(client, code="code-1", user_agent="Mozilla/BrowserA")
 
     async with async_session_factory() as db:
         session1 = await db.get(Session, session1_id)
@@ -216,7 +221,7 @@ async def test_a_new_device_login_creates_exactly_one_security_alert_per_custome
         )
 
     # Second login, a genuinely different device — now there's a baseline.
-    session2_id = await _google_login(code="code-2", user_agent="Mozilla/BrowserB")
+    session2_id = await _google_login(client, code="code-2", user_agent="Mozilla/BrowserB")
 
     notifications = (
         await client.get(
@@ -230,7 +235,7 @@ async def test_a_new_device_login_creates_exactly_one_security_alert_per_custome
     assert alerts[0]["reference_id"] == str(session2_id)
 
     # Third login, SAME device as session2 — already-known, no new alert.
-    session3_id = await _google_login(code="code-3", user_agent="Mozilla/BrowserB")
+    session3_id = await _google_login(client, code="code-3", user_agent="Mozilla/BrowserB")
 
     notifications_after_third = (
         await client.get(
@@ -241,3 +246,41 @@ async def test_a_new_device_login_creates_exactly_one_security_alert_per_custome
     alerts_after_third = [n for n in notifications_after_third if n["notification_type"] == "SECURITY_ALERT"]
     assert len(alerts_after_third) == 1
     assert alerts_after_third[0]["reference_id"] == str(session2_id)
+
+
+async def test_a_failure_writing_the_new_device_notification_does_not_fail_the_login(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch, db_available: bool
+) -> None:
+    """`google_login_callback`'s own comment claims the notify_new_device_login
+    call is "best-effort" — any failure there is caught and logged rather than
+    turning an already-successful login into a 500 for the user. That
+    try/except has never actually been exercised: every prior test's
+    notification write has always succeeded. Prove the claim rather than
+    trust the comment (the exact class of gap this codebase has repeatedly
+    found elsewhere: a documented safety behavior nobody ever triggered).
+    """
+    monkeypatch.setattr("doda.api.auth.get_settings", lambda: _configured_settings())
+    subject = str(uuid.uuid4())
+
+    async def fake_login_with_google(**kwargs: object) -> GoogleUserInfo:
+        return GoogleUserInfo(subject=subject, display_name="Notify Failure User")
+
+    monkeypatch.setattr("doda.application.oidc_login_service.login_with_google", fake_login_with_google)
+
+    # First login establishes a baseline device (quiet — no notification path
+    # is reached at all, so this doesn't yet exercise anything).
+    await _google_login(client, code="code-1", user_agent="Mozilla/BrowserA")
+
+    # Second login, a genuinely new device: this *would* notify, but the
+    # notification call itself is made to blow up.
+    async def failing_notify(**kwargs: object) -> None:
+        raise RuntimeError("simulated notification-write failure")
+
+    monkeypatch.setattr("doda.api.auth.notify_new_device_login", failing_notify)
+
+    session2_id = await _google_login(client, code="code-2", user_agent="Mozilla/BrowserB")
+
+    # The login itself must still have fully succeeded despite the
+    # notification failure: the session is real and usable.
+    whoami = await client.get("/v1/me/workspaces", headers={"Authorization": f"Bearer {session2_id}"})
+    assert whoami.status_code == 200

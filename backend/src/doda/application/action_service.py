@@ -7,6 +7,7 @@ callers are expected to have already run authz before calling here.
 
 import secrets
 import uuid
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -23,13 +24,37 @@ from doda.domain.action.models import AUTO_APPROVED_RISK_LEVELS, Action, ActionS
 from doda.domain.action.state_machine import InvalidActionTransition, transition
 from doda.domain.action.tool_policy import enforce_minimum_risk_level
 from doda.domain.base import utcnow
+from doda.domain.identity.models import ActorKind
 from doda.domain.notification.models import NotificationType
 
 MAX_PAGE_SIZE = 200
 
+# FR-ACT-005's persistent (cross-cycle) retry budget — see
+# record_transient_failure's own docstring. Distinct from telegram_relay's
+# TELEGRAM_SEND_ATTEMPTS, which retries within a single connector call and
+# never touches Action.retry_count.
+MAX_ACTION_RETRIES = 3
+RETRY_BACKOFF_BASE_SECONDS = 60
+RETRY_SCHEDULER_ACTOR_ID = "system:action_retry_scheduler"
+
 
 class ApprovalInvalidError(Exception):
     """Raised when an approval cannot be consumed as-is (9.2 invariants)."""
+
+
+class ServiceActorRiskLevelExceededError(Exception):
+    """FR-AUTH-009 / 2.2's role table: a Service Actor's own maximum risk
+    level is R2 — it can never propose an action that would require human
+    approval, since it is also barred from ever consuming one
+    (authorize_consume_approval). Raised before the Action row is even
+    created (DRAFT), same "checked first" placement as the kill switch
+    check right above it in propose_action."""
+
+    def __init__(self, risk_level: RiskLevel) -> None:
+        self.risk_level = risk_level
+        super().__init__(
+            f"a service actor may not propose a {risk_level.value} action (max is R2, FR-AUTH-009)"
+        )
 
 
 class MissingProviderReceiptError(Exception):
@@ -81,6 +106,7 @@ async def propose_action(
     payload: dict[str, Any],
     idempotency_key: str,
     task_id: uuid.UUID | None = None,
+    actor_kind: ActorKind,
 ) -> tuple[Action, bool]:
     """Create a DRAFT action, or return the existing one for a repeated
     idempotency_key (FR-ACT-004) instead of creating a duplicate.
@@ -96,9 +122,25 @@ async def propose_action(
     can request a HIGHER tier than a tool's floor, never a lower one, so
     a registered tool's approval/step-up requirement can't be skipped by
     under-declaring risk_level in the request body.
+
+    15th security-review pass (FR-AUTH-009) found this parameter's own
+    default let `ai_tools.propose_write_tool_action`'s call site silently
+    inherit HUMAN and skip the Service Actor R2 cap entirely — a real,
+    confirmed bypass. That call site was fixed by threading `actor_kind`
+    through explicitly, but its default stayed *here*, on the exact
+    function whose default caused the bug — a 6th-`/simplify`-pass
+    altitude review pointed out that leaves the same seam open for
+    whichever caller is added next. `actor_kind`'s own default is kept
+    only on `Session.create_session` (`session_service.py`) — there are
+    exactly two, structurally fixed creation paths (OIDC login: always
+    human; the service-actor endpoint: always passes SERVICE explicitly)
+    with no security decision resting on which one a careless future
+    caller picks by omission, unlike this function.
     """
     await assert_not_killed(session, customer_id=customer_id, workspace_id=workspace_id)
     risk_level = enforce_minimum_risk_level(tool_name, risk_level)
+    if actor_kind is ActorKind.SERVICE and risk_level not in AUTO_APPROVED_RISK_LEVELS:
+        raise ServiceActorRiskLevelExceededError(risk_level)
 
     action = Action(
         customer_id=customer_id,
@@ -180,6 +222,7 @@ async def apply_transition(
     *,
     actor_id: str,
     receipt: dict[str, Any] | None = None,
+    notify: bool = True,
 ) -> Action:
     """Validate+apply a state transition and audit it either way (4.2).
 
@@ -208,6 +251,14 @@ async def apply_transition(
     silently unverified success. The receipt is recorded on the audit
     event for this transition (`provider_receipt` in safe_metadata), not
     just accepted and discarded.
+
+    `notify=False` suppresses the FAILED_ACTION notification that would
+    otherwise fire on a transition to FAILED — used only by
+    record_transient_failure's intermediate FAILED hop on its way to
+    RETRYING, so a retryable failure does not notify on every cycle, only
+    once the retry budget is actually exhausted (see that function). Every
+    other caller keeps the default: FAILED always notifies unless a caller
+    explicitly opts out for a documented reason.
     """
     if target is ActionStatus.SUCCEEDED and receipt is None:
         raise MissingProviderReceiptError(action.id)
@@ -261,7 +312,7 @@ async def apply_transition(
             reference_id=action.id,
             safe_metadata={"tool_name": action.tool_name, "risk_level": action.risk_level.value},
         )
-    elif target is ActionStatus.FAILED:
+    elif target is ActionStatus.FAILED and notify:
         await create_notification(
             session,
             customer_id=action.customer_id,
@@ -273,6 +324,78 @@ async def apply_transition(
             safe_metadata={"tool_name": action.tool_name},
         )
     return action
+
+
+async def record_transient_failure(session: AsyncSession, action: Action, *, actor_id: str) -> bool:
+    """FR-ACT-005's persistent half: closes telegram_relay.py's own
+    documented gap ("no cross-cycle circuit breaker... a SUSTAINED outage
+    still ends in a terminal FAILED"). A connector calls this instead of
+    apply_transition(..., FAILED) directly when its OWN in-process retry
+    budget (e.g. telegram_relay's TELEGRAM_SEND_ATTEMPTS) is exhausted for
+    one delivery attempt — this function decides whether that's actually
+    the end of the story.
+
+    While action.retry_count is under MAX_ACTION_RETRIES: drives the
+    action through FAILED (notify=False — this is not yet a final failure,
+    so FR-NTF-002's FAILED_ACTION notification must not fire here, or a
+    sustained outage would spam it once per retry cycle) then straight to
+    RETRYING, with retry_count incremented and next_retry_at set
+    (exponential backoff). The action sits in RETRYING until
+    promote_due_retries picks it up — this function does not re-enqueue
+    the outbox message itself, since READY is what triggers that, not
+    RETRYING. Returns True.
+
+    Once the budget is exhausted, falls through to the exact terminal path
+    apply_transition(..., FAILED) has always taken (notify=True, the
+    caller's actor_id, no receipt) — behaviourally identical to before
+    this function existed. Returns False.
+    """
+    if action.retry_count < MAX_ACTION_RETRIES:
+        await apply_transition(session, action, ActionStatus.FAILED, actor_id=actor_id, notify=False)
+        action.retry_count += 1
+        action.next_retry_at = utcnow() + timedelta(
+            seconds=RETRY_BACKOFF_BASE_SECONDS * (2 ** (action.retry_count - 1))
+        )
+        await apply_transition(session, action, ActionStatus.RETRYING, actor_id=actor_id)
+        return True
+    await apply_transition(session, action, ActionStatus.FAILED, actor_id=actor_id)
+    return False
+
+
+async def promote_due_retries(session: AsyncSession, *, now: datetime | None = None) -> list[Action]:
+    """The other half of record_transient_failure: scans this transaction's
+    tenant (customer_id already bound by tenant_scoped_session) for
+    RETRYING actions whose next_retry_at has passed, drives each back to
+    READY, and re-enqueues the exact same action.ready.v1 outbox message
+    validate_action/consume_approval already enqueue on the normal path —
+    so the connector that originally picked this action up sees it again,
+    with no special-casing on its side for "this is a retry".
+
+    Called by backend/scripts/promote_due_action_retries_job.py, once per
+    customer via UserCustomerIndex — the same "standalone script iterates
+    customers, calls one tenant-scoped application function per customer"
+    shape as fire_due_reminders_job.py/verify_audit_chain_job.py.
+    """
+    now = now or utcnow()
+    result = await session.execute(
+        select(Action).where(Action.status == ActionStatus.RETRYING, Action.next_retry_at <= now)
+    )
+    due = list(result.scalars())
+    for action in due:
+        await apply_transition(session, action, ActionStatus.READY, actor_id=RETRY_SCHEDULER_ACTOR_ID)
+        await enqueue_outbox_message(
+            session,
+            customer_id=action.customer_id,
+            aggregate_type="action",
+            aggregate_id=action.id,
+            event_type="action.ready.v1",
+            payload={
+                "action_id": str(action.id),
+                "tool_name": action.tool_name,
+                "retry_count": action.retry_count,
+            },
+        )
+    return due
 
 
 async def request_cancellation(session: AsyncSession, action: Action, *, actor_id: str) -> Action:

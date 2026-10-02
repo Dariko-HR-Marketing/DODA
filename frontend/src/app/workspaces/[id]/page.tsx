@@ -1,25 +1,31 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
   ApiError,
   archiveWorkspace,
+  attachTaskDocument,
   cancelAction,
   cancelTaskReminder,
   changeTaskStatus,
   changeWorkspaceMemberRole,
   confirmTaskReminder,
   createTask,
+  deleteDocument,
+  detachTaskDocument,
   disengageWorkspaceKillSwitch,
+  downloadDocument,
   engageWorkspaceKillSwitch,
+  getTaskAttachments,
   getTaskDecisions,
   getTaskHistory,
   getTaskPlan,
   getTaskReminders,
   getWorkspaceKillSwitch,
   listActions,
+  listDocuments,
   listNotifications,
   listTasks,
   listWorkspaceAudit,
@@ -28,11 +34,14 @@ import {
   recordTaskDecision,
   removeWorkspaceMember,
   requestTaskReminder,
+  uploadDocument,
   type ActionOut,
   type AuditEventOut,
+  type DocumentOut,
   type KillSwitchStatusOut,
   type NotificationOut,
   type ReminderOut,
+  type TaskAttachmentOut,
   type TaskDecisionOut,
   type TaskHistoryEntryOut,
   type TaskOut,
@@ -53,6 +62,11 @@ const OTHER_ROLE: Record<WorkspaceRole, WorkspaceRole> = {
   member: "workspace_admin",
   workspace_admin: "member",
 };
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  return `${(bytes / 1024).toFixed(1)} KB`;
+}
 
 interface DecisionDraft {
   variant: string;
@@ -91,9 +105,17 @@ export default function WorkspacePage() {
   const [openTaskReminders, setOpenTaskReminders] = useState<Record<string, ReminderOut[]>>({});
   const [reminderDrafts, setReminderDrafts] = useState<Record<string, string>>({});
   const [requestingReminderFor, setRequestingReminderFor] = useState<string | null>(null);
+  const [openTaskAttachments, setOpenTaskAttachments] = useState<Record<string, TaskAttachmentOut[]>>({});
+  const [attachDrafts, setAttachDrafts] = useState<Record<string, string>>({});
+  const [attachingFor, setAttachingFor] = useState<string | null>(null);
+  const [detachingAttachmentId, setDetachingAttachmentId] = useState<string | null>(null);
   const [traceIdInput, setTraceIdInput] = useState("");
   const [appliedTraceId, setAppliedTraceId] = useState("");
   const [cancellingActionId, setCancellingActionId] = useState<string | null>(null);
+  const [documents, setDocuments] = useState<DocumentOut[] | null>(null);
+  const [uploadingDocument, setUploadingDocument] = useState(false);
+  const [deletingDocumentId, setDeletingDocumentId] = useState<string | null>(null);
+  const documentFileInputRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(() => {
     if (sessionId === null) return;
@@ -107,6 +129,7 @@ export default function WorkspacePage() {
     listWorkspaceAudit(sessionId, workspaceId, appliedTraceId || undefined)
       .then(setAuditEvents)
       .catch(() => {});
+    listDocuments(sessionId, workspaceId).then(setDocuments).catch(() => {});
   }, [sessionId, workspaceId, appliedTraceId]);
 
   useEffect(() => {
@@ -142,6 +165,47 @@ export default function WorkspacePage() {
       setError(err instanceof ApiError ? err.message : "Task yaratib bo'lmadi.");
     } finally {
       setCreatingTask(false);
+    }
+  }
+
+  async function handleUploadDocument(event: FormEvent) {
+    event.preventDefault();
+    const file = documentFileInputRef.current?.files?.[0];
+    if (sessionId === null || !file || uploadingDocument) return;
+    setUploadingDocument(true);
+    try {
+      await uploadDocument(sessionId, workspaceId, file);
+      if (documentFileInputRef.current) documentFileInputRef.current.value = "";
+      refresh();
+    } catch (err) {
+      // FR-KNW-001: a rejected upload (wrong type, too large, content
+      // doesn't match its declared type) surfaces its own specific
+      // reason here rather than a generic failure message.
+      setError(err instanceof ApiError ? err.message : "Faylni yuklab bo'lmadi.");
+    } finally {
+      setUploadingDocument(false);
+    }
+  }
+
+  async function handleDownloadDocument(doc: DocumentOut) {
+    if (sessionId === null) return;
+    try {
+      await downloadDocument(sessionId, workspaceId, doc.id, doc.filename);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Faylni yuklab bo'lmadi.");
+    }
+  }
+
+  async function handleDeleteDocument(doc: DocumentOut) {
+    if (sessionId === null || deletingDocumentId !== null) return;
+    setDeletingDocumentId(doc.id);
+    try {
+      await deleteDocument(sessionId, workspaceId, doc.id);
+      refresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Faylni o'chirib bo'lmadi.");
+    } finally {
+      setDeletingDocumentId(null);
     }
   }
 
@@ -293,6 +357,59 @@ export default function WorkspacePage() {
       setOpenTaskReminders((prev) => ({ ...prev, [task.id]: reminders }));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Eslatmani bekor qilib bo'lmadi.");
+    }
+  }
+
+  async function toggleTaskAttachments(task: TaskOut) {
+    if (sessionId === null) return;
+    if (openTaskAttachments[task.id] !== undefined) {
+      setOpenTaskAttachments((prev) => {
+        const next = { ...prev };
+        delete next[task.id];
+        return next;
+      });
+      return;
+    }
+    try {
+      const attachments = await getTaskAttachments(sessionId, workspaceId, task.id);
+      setOpenTaskAttachments((prev) => ({ ...prev, [task.id]: attachments }));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Ilovalarni yuklab bo'lmadi.");
+    }
+  }
+
+  async function handleAttachDocument(task: TaskOut) {
+    if (sessionId === null || attachingFor !== null) return;
+    const documentId = attachDrafts[task.id];
+    if (!documentId) return;
+    setAttachingFor(task.id);
+    try {
+      const attachment = await attachTaskDocument(sessionId, workspaceId, task.id, documentId);
+      setAttachDrafts((prev) => ({ ...prev, [task.id]: "" }));
+      setOpenTaskAttachments((prev) => ({
+        ...prev,
+        [task.id]: [...(prev[task.id] ?? []), attachment],
+      }));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Faylni task'ga bog'lab bo'lmadi.");
+    } finally {
+      setAttachingFor(null);
+    }
+  }
+
+  async function handleDetachDocument(task: TaskOut, attachment: TaskAttachmentOut) {
+    if (sessionId === null || detachingAttachmentId !== null) return;
+    setDetachingAttachmentId(attachment.id);
+    try {
+      await detachTaskDocument(sessionId, workspaceId, task.id, attachment.id);
+      setOpenTaskAttachments((prev) => ({
+        ...prev,
+        [task.id]: (prev[task.id] ?? []).filter((a) => a.id !== attachment.id),
+      }));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Bog'lanishni uzib bo'lmadi.");
+    } finally {
+      setDetachingAttachmentId(null);
     }
   }
 
@@ -495,6 +612,12 @@ export default function WorkspacePage() {
                   >
                     {openTaskReminders[task.id] !== undefined ? "Eslatmalarni yashirish" : "Eslatmalar"}
                   </button>
+                  <button
+                    onClick={() => toggleTaskAttachments(task)}
+                    className="text-xs text-gray-500 hover:underline"
+                  >
+                    {openTaskAttachments[task.id] !== undefined ? "Fayllarni yashirish" : "Bog'langan fayllar"}
+                  </button>
                 </div>
               </div>
               {openTaskHistory[task.id] !== undefined && (
@@ -637,10 +760,122 @@ export default function WorkspacePage() {
                   </form>
                 </div>
               )}
+              {openTaskAttachments[task.id] !== undefined && (
+                <div className="mt-2 space-y-2 border-t border-gray-100 pt-2">
+                  <ul data-testid="attachment-list" className="space-y-1">
+                    {openTaskAttachments[task.id].map((attachment) => (
+                      <li key={attachment.id} className="text-xs text-gray-500">
+                        {attachment.broken ? (
+                          <span className="text-red-600">Uzilgan havola (fayl o&apos;chirilgan)</span>
+                        ) : (
+                          <>
+                            {attachment.filename}
+                            {attachment.size_bytes !== null && ` (${formatFileSize(attachment.size_bytes)})`}
+                          </>
+                        )}{" "}
+                        <button
+                          onClick={() => handleDetachDocument(task, attachment)}
+                          disabled={detachingAttachmentId === attachment.id}
+                          className="text-red-600 hover:underline disabled:opacity-50"
+                        >
+                          Uzish
+                        </button>
+                      </li>
+                    ))}
+                    {openTaskAttachments[task.id].length === 0 && (
+                      <li className="text-xs text-gray-500">Hech qanday fayl bog&apos;lanmagan.</li>
+                    )}
+                  </ul>
+                  <form
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      handleAttachDocument(task);
+                    }}
+                    className="flex items-center gap-2"
+                  >
+                    <select
+                      aria-label="Bog'lanadigan fayl"
+                      value={attachDrafts[task.id] ?? ""}
+                      onChange={(event) =>
+                        setAttachDrafts((prev) => ({ ...prev, [task.id]: event.target.value }))
+                      }
+                      className="rounded border border-gray-200 px-2 py-1 text-xs"
+                    >
+                      <option value="">Fayl tanlang...</option>
+                      {documents?.map((doc) => (
+                        <option key={doc.id} value={doc.id}>
+                          {doc.filename}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="submit"
+                      disabled={attachingFor === task.id || !attachDrafts[task.id]}
+                      className="text-xs text-blue-600 hover:underline disabled:opacity-50"
+                    >
+                      Bog&apos;lash
+                    </button>
+                  </form>
+                </div>
+              )}
             </li>
           ))}
           {tasks !== null && tasks.length === 0 && (
             <li className="text-sm text-gray-500">Hali task yo&apos;q.</li>
+          )}
+        </ul>
+      </section>
+
+      <section>
+        <h2 className="mb-3 text-lg font-semibold">Fayllar</h2>
+        <form onSubmit={handleUploadDocument} className="mb-3 flex items-center gap-2">
+          <input
+            ref={documentFileInputRef}
+            type="file"
+            accept=".pdf,.docx,.xlsx,.txt,.png,.jpg,.jpeg"
+            aria-label="Yuklanadigan fayl"
+          />
+          <button
+            type="submit"
+            disabled={uploadingDocument}
+            className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+          >
+            Yuklash
+          </button>
+        </form>
+        <ul data-testid="document-list" className="space-y-2">
+          {documents?.map((doc) => (
+            <li
+              key={doc.id}
+              className="flex items-center justify-between rounded-md border border-gray-200 px-3 py-2 text-sm"
+            >
+              <div className="flex flex-col">
+                <span>{doc.filename}</span>
+                <span className="text-xs text-gray-500">
+                  {doc.content_type} · {formatFileSize(doc.size_bytes)}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleDownloadDocument(doc)}
+                  className="text-xs text-blue-600 hover:underline"
+                >
+                  Yuklab olish
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDeleteDocument(doc)}
+                  disabled={deletingDocumentId === doc.id}
+                  className="text-xs text-red-600 hover:underline disabled:opacity-50"
+                >
+                  O&apos;chirish
+                </button>
+              </div>
+            </li>
+          ))}
+          {documents !== null && documents.length === 0 && (
+            <li className="text-sm text-gray-500">Hali fayl yo&apos;q.</li>
           )}
         </ul>
       </section>

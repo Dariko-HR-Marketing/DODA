@@ -25,7 +25,7 @@ from doda.application.workspace_service import create_workspace
 from doda.db import tenant_scoped_session
 from doda.domain.action.models import RiskLevel
 from doda.domain.customer.models import Customer, CustomerMembership, UserCustomerIndex
-from doda.domain.identity.models import AuthStrength, User
+from doda.domain.identity.models import ActorKind, AuthStrength, User
 from doda.domain.workspace.models import WorkspaceMembership
 
 
@@ -70,6 +70,7 @@ async def main(prefix: str) -> None:
             payload={"to": "demo@example.com"},
             idempotency_key=str(uuid.uuid4()),
             task_id=None,
+            actor_kind=ActorKind.HUMAN,
         )
         await submit_action_for_execution(db, action, actor_id=f"user:{owner.id}")
 

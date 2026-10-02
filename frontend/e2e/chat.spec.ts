@@ -45,6 +45,33 @@ test("chat: send a message, get the real NullModelGateway reply, pin a provider"
     ).toBeVisible();
   });
 
+  await test.step("editing the latest message regenerates without deleting the original (FR-CONV-007)", async () => {
+    await page.click('button:has-text("Tahrirlash")');
+    await expect(page.getByText("Oxirgi xabaringizni tahrirlayapsiz")).toBeVisible();
+    await expect(page.getByPlaceholder("Xabar yozing...")).toHaveValue("Salom, DODA!");
+
+    await page.fill('input[placeholder="Xabar yozing..."]', "Salom, DODA! (tahrirlangan)");
+    await page.click('button:has-text("Qayta generatsiya qilish")');
+
+    await expect(page.getByText("Salom, DODA! (tahrirlangan)")).toBeVisible();
+    // The original exchange must still be there, untouched — FR-CONV-007's
+    // own acceptance criterion ("doesn't delete the old one").
+    await expect(page.getByText("Salom, DODA!", { exact: true })).toBeVisible();
+
+    const response = await page.request.get(
+      `http://localhost:8000/v1/workspaces/${WORKSPACE_ID}/conversations`,
+      { headers: { Authorization: `Bearer ${SESSION_ID}` } },
+    );
+    const conversations = await response.json();
+    const conversationId = conversations[0].id;
+    const messagesResponse = await page.request.get(
+      `http://localhost:8000/v1/workspaces/${WORKSPACE_ID}/conversations/${conversationId}/messages`,
+      { headers: { Authorization: `Bearer ${SESSION_ID}` } },
+    );
+    const messages: { role: string; content: string }[] = await messagesResponse.json();
+    expect(messages.filter((m) => m.role === "USER")).toHaveLength(2);
+  });
+
   await test.step("pinning a conversation provider persists server-side", async () => {
     // Scoped to the provider form specifically — the language form below
     // (FR-CONV-001) has its own, identically-labeled "Pin qilish" button,
@@ -173,6 +200,75 @@ test("chat: cancelling an in-flight turn resets the UI without an error", async 
   await expect(cancelButton).not.toBeVisible();
   await expect(page.getByText("bekor qilinadi")).not.toBeVisible();
 
+  expect(consoleErrors, `unexpected browser console errors: ${consoleErrors.join("\n")}`).toEqual([]);
+});
+
+test("chat: switching conversations mid-refresh never lets a stale response repaint the wrong one", async ({
+  page,
+}) => {
+  // handleSend()'s finally block fires a listConversationMessages() GET for
+  // the conversation the message was just sent in, but doesn't await it.
+  // Network tracing (via page.on("request"/"response")) showed this GET is
+  // NOT the first thing that happens after the reply text becomes visible —
+  // NullModelGateway's reply renders via streamed/pending state well before
+  // the stream actually ends and the finally block runs, so this GET can
+  // fire even AFTER the user has already clicked "Yangi suhbat" to switch to
+  // a brand-new conversation. If that switch happens first, the stale GET's
+  // response (for the OLD conversation) must not overwrite the (correctly
+  // empty) messages already showing for the new one.
+  //
+  // Because the stale GET's actual firing time floats relative to UI
+  // events, this cannot be pinned down by delaying a route only up to some
+  // visible checkpoint (an earlier version of this test did that, unrouting
+  // right after the reply became visible, and it never observed the delayed
+  // GET at all — the real one fired after unroute and went through
+  // instantly, masking the race). Instead, the route delays only the FIRST
+  // GET it ever sees for this test — that is always the send's own stale
+  // refresh, since it is the first GET issued after the message is sent —
+  // and lets every subsequent GET (the new conversation's own fetch) through
+  // immediately, which is what actually isolates the race deterministically.
+  const consoleErrors: string[] = [];
+  page.on("console", (msg) => {
+    if (msg.type() === "error") consoleErrors.push(msg.text());
+  });
+  page.on("pageerror", (err) => consoleErrors.push(String(err)));
+
+  const needle = "sariq tulporli chumoli 77";
+
+  await page.goto("/login");
+  await page.fill("#session-id", SESSION_ID);
+  await page.click('button[type="submit"]');
+  await page.waitForURL("**/workspaces");
+  await page.goto(`/workspaces/${WORKSPACE_ID}/chat`);
+
+  await page.click('button:has-text("Yangi suhbat")');
+  await expect(page.getByPlaceholder("Xabar yozing...")).toBeVisible();
+
+  let firstGetSeen = false;
+  await page.route("**/conversations/*/messages", async (route) => {
+    if (route.request().method() === "GET" && !firstGetSeen) {
+      firstGetSeen = true;
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+    await route.continue();
+  });
+
+  await page.fill('input[placeholder="Xabar yozing..."]', needle);
+  await page.click('button:has-text("Yuborish")');
+  await expect(page.getByText(needle, { exact: false }).first()).toBeVisible();
+
+  // Switch to a second, brand-new conversation right away — the stale GET
+  // (delayed above) has not resolved yet.
+  await page.click('button:has-text("Yangi suhbat")');
+  await expect(page.getByText(needle)).not.toBeVisible();
+
+  // Wait past the artificial delay, so the stale GET's response has
+  // definitely arrived by now — the assertion must still hold: it must not
+  // have repainted conversation B with conversation A's messages.
+  await page.waitForTimeout(2500);
+  await expect(page.getByText(needle)).not.toBeVisible();
+
+  await page.unroute("**/conversations/*/messages");
   expect(consoleErrors, `unexpected browser console errors: ${consoleErrors.join("\n")}`).toEqual([]);
 });
 

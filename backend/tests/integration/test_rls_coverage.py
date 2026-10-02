@@ -27,6 +27,7 @@ from doda.domain.base import Base
 from doda.domain.conversation import models as _conversation_models  # noqa: F401
 from doda.domain.customer import models as _customer_models  # noqa: F401
 from doda.domain.identity import models as _identity_models  # noqa: F401
+from doda.domain.knowledge import models as _knowledge_models  # noqa: F401
 from doda.domain.notification import models as _notification_models  # noqa: F401
 from doda.domain.outbox import models as _outbox_models  # noqa: F401
 from doda.domain.security import kill_switch as _security_kill_switch_models  # noqa: F401
@@ -46,7 +47,17 @@ from doda.domain.workspace import models as _workspace_models  # noqa: F401
 #   every customer's pending messages to deliver them, and the payload is
 #   already-derived event data, not raw tenant content. See
 #   doda.domain.outbox.models.OutboxMessage.
-KNOWN_RLS_EXEMPT_TABLES = {"workspace_tenant_index", "user_customer_index", "outbox_messages"}
+# - service_actor_credentials: the same chicken-and-egg problem one more
+#   level up — verifying a presented secret must happen BEFORE any
+#   customer_id is known (there is nothing else to key a
+#   tenant_scoped_session on yet), so the lookup itself cannot run inside
+#   one. See doda.domain.identity.models.ServiceActorCredential.
+KNOWN_RLS_EXEMPT_TABLES = {
+    "workspace_tenant_index",
+    "user_customer_index",
+    "outbox_messages",
+    "service_actor_credentials",
+}
 
 
 def _tables_with_customer_id() -> set[str]:

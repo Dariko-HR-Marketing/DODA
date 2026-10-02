@@ -1,15 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
   ApiError,
   changeCustomerMemberRole,
+  clearAiBudgetLimits,
   clearMyAiPreference,
   disengageCustomerKillSwitch,
   downloadJsonFile,
   engageCustomerKillSwitch,
+  getAiBudgetLimits,
   getAiBudgetStatus,
   getAiFallbackSetting,
   getAiUsageReport,
@@ -27,6 +29,7 @@ import {
   markCustomerNotificationRead,
   removeCustomerMember,
   restoreWorkspace,
+  setAiBudgetLimits,
   setAiFallbackSetting,
   setMyAiPreference,
   setNotificationPreference,
@@ -34,6 +37,7 @@ import {
   testProviderConnection,
   verifyCustomerAuditChain,
   AI_PROVIDERS,
+  type AiBudgetLimitsOut,
   type AiBudgetStatusOut,
   type AiFallbackSettingOut,
   type AiPreferenceOut,
@@ -80,6 +84,10 @@ export default function CustomerPage() {
   const [providerStatuses, setProviderStatuses] = useState<ProviderStatusOut[] | null>(null);
   const [budgetStatus, setBudgetStatus] = useState<AiBudgetStatusOut | null>(null);
   const [usageReport, setUsageReport] = useState<AiUsageReportRowOut[] | null>(null);
+  const [budgetLimits, setBudgetLimits] = useState<AiBudgetLimitsOut | null>(null);
+  const [softCapInput, setSoftCapInput] = useState("");
+  const [hardCapInput, setHardCapInput] = useState("");
+  const [savingBudgetLimits, setSavingBudgetLimits] = useState(false);
   const [testingProvider, setTestingProvider] = useState<string | null>(null);
   const [fallbackSetting, setFallbackSetting] = useState<AiFallbackSettingOut | null>(null);
   const [togglingFallback, setTogglingFallback] = useState(false);
@@ -90,6 +98,19 @@ export default function CustomerPage() {
   const [traceIdInput, setTraceIdInput] = useState("");
   const [appliedTraceId, setAppliedTraceId] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // refresh() re-fetches this page's whole state after ANY mutation (kill
+  // switch, member changes, etc.), not just budget-limit ones — its
+  // getAiBudgetLimits() call used to unconditionally overwrite
+  // softCapInput/hardCapInput on every one of those, so an in-flight
+  // refresh() triggered by an unrelated action (e.g. engaging the kill
+  // switch) could land after the user had already started typing into the
+  // budget-cap fields and silently wipe them back to "" — a real,
+  // reproducible race, not a flake (caught by two consecutive E2E runs
+  // failing at the same step with "budget caps must be positive", which is
+  // exactly what submitting the wiped, empty inputs as 0/0 produces). Only
+  // populate the inputs from the server on the very first load; later
+  // refreshes leave whatever the user is editing alone.
+  const budgetLimitsLoadedRef = useRef(false);
 
   const refresh = useCallback(() => {
     if (sessionId === null) return;
@@ -123,6 +144,16 @@ export default function CustomerPage() {
     // silently for a plain member, same as archived workspaces above.
     getAiBudgetStatus(sessionId, customerId).then(setBudgetStatus).catch(() => {});
     getAiUsageReport(sessionId, customerId).then(setUsageReport).catch(() => {});
+    getAiBudgetLimits(sessionId, customerId)
+      .then((limits) => {
+        setBudgetLimits(limits);
+        if (!budgetLimitsLoadedRef.current) {
+          budgetLimitsLoadedRef.current = true;
+          setSoftCapInput(limits.soft_cap_usd !== null ? String(limits.soft_cap_usd) : "");
+          setHardCapInput(limits.hard_cap_usd !== null ? String(limits.hard_cap_usd) : "");
+        }
+      })
+      .catch(() => {});
     getMyAiPreference(sessionId, customerId).then(setMyAiPreferenceState).catch(() => {});
   }, [sessionId, customerId, appliedTraceId]);
 
@@ -272,6 +303,39 @@ export default function CustomerPage() {
       setError(err instanceof ApiError ? err.message : "Fallback sozlamasini o'zgartirib bo'lmadi.");
     } finally {
       setTogglingFallback(false);
+    }
+  }
+
+  async function handleSetBudgetLimits(event: FormEvent) {
+    event.preventDefault();
+    const soft = Number(softCapInput);
+    const hard = Number(hardCapInput);
+    if (sessionId === null || savingBudgetLimits || !Number.isFinite(soft) || !Number.isFinite(hard)) return;
+    setSavingBudgetLimits(true);
+    try {
+      const updated = await setAiBudgetLimits(sessionId, customerId, soft, hard);
+      setBudgetLimits(updated);
+      refresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Byudjet limitlarini saqlab bo'lmadi.");
+    } finally {
+      setSavingBudgetLimits(false);
+    }
+  }
+
+  async function handleClearBudgetLimits() {
+    if (sessionId === null || savingBudgetLimits) return;
+    setSavingBudgetLimits(true);
+    try {
+      await clearAiBudgetLimits(sessionId, customerId);
+      setBudgetLimits({ soft_cap_usd: null, hard_cap_usd: null });
+      setSoftCapInput("");
+      setHardCapInput("");
+      refresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Byudjet limitlarini tozalab bo'lmadi.");
+    } finally {
+      setSavingBudgetLimits(false);
     }
   }
 
@@ -464,6 +528,50 @@ export default function CustomerPage() {
             </table>
           </div>
         )}
+        {/* FR-ADM-005: set/clear this customer's own AI budget caps —
+            no row (budgetLimits.soft_cap_usd === null) means the
+            deployment-wide default from the banner above still applies. */}
+        <form onSubmit={handleSetBudgetLimits} className="mb-3 flex flex-wrap items-center gap-2 text-sm">
+          <label className="flex items-center gap-1">
+            Soft cap ($)
+            <input
+              type="number"
+              min="0.01"
+              step="0.01"
+              value={softCapInput}
+              onChange={(e) => setSoftCapInput(e.target.value)}
+              className="w-24 rounded-md border border-gray-300 px-2 py-1"
+            />
+          </label>
+          <label className="flex items-center gap-1">
+            Hard cap ($)
+            <input
+              type="number"
+              min="0.01"
+              step="0.01"
+              value={hardCapInput}
+              onChange={(e) => setHardCapInput(e.target.value)}
+              className="w-24 rounded-md border border-gray-300 px-2 py-1"
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={savingBudgetLimits}
+            className="rounded-md bg-blue-600 px-3 py-1.5 text-white disabled:opacity-50"
+          >
+            Saqlash
+          </button>
+          {budgetLimits?.soft_cap_usd !== null && budgetLimits?.soft_cap_usd !== undefined && (
+            <button
+              type="button"
+              onClick={handleClearBudgetLimits}
+              disabled={savingBudgetLimits}
+              className="text-xs text-red-600 hover:underline disabled:opacity-50"
+            >
+              Standart qiymatga qaytarish
+            </button>
+          )}
+        </form>
         <ul className="space-y-2">
           {providerStatuses?.map((provider) => (
             <li

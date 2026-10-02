@@ -7018,3 +7018,2254 @@ injection/authz emas, va mavjud catch-all handler orqali hech qanday
 sezgir narsa sizib chiqmaydi (`trace_id` bilan xavfsiz generic javob).
 
 498 test, barchasi real Postgres'da (kod o'zgarmadi — sof tekshiruv).
+
+**FR-KNW-001 (fayl ingest: PDF/DOCX/XLSX/TXT/rasm; tur, hajm va malware
+validatsiyasi) qurildi — Knowledge/RAG domenidagi birinchi vertikal
+bo'lak, Product Owner "Knowledge/RAG domenini boshlash"ni aniq
+tanlaganidan keyin.** Bu ID traceability auditda "41 ta hech qayerda
+tilga olinmagan" ro'yxatida edi. TRD'ning o'z 3.5-bo'limini (pandoc
+orqali, xotiradan emas) o'qib chiqib qamrov ataylab torraytirildi:
+FR-KNW-002 dan boshlab (parsing→chunking→embedding→retrieval,
+citation, "manba topilmasa ochiq ayt") barchasi haqiqiy, ishlaydigan
+AI-provider embedding chaqiruvini talab qiladi — bu muhitning tarmoq
+siyosati OpenAI/Gemini/Claude'ning haqiqiy API'siga chiqishni bloklaydi
+(Telegram/Google OIDC bilan bir xil, allaqachon hujjatlashtirilgan
+cheklov), demak bu qismlarni "qurish" xayoliy, tekshirib bo'lmaydigan
+kod yozish bo'lardi — QOIDA 1'ning o'zi buni taqiqlaydi. Faqat
+FR-KNW-001'ning o'zi qurildi: "Zararli fixture fayllar rad etiladi
+(security test); hajm limiti majburiy" — bu aniq, deterministik, hech
+qanday AI chaqiruviga bog'liq emas.
+
+`doda.storage.port.ObjectStoragePort` — `doda.ai.port.ModelGateway`ning
+aynan bir xil "Protocol + factory + bitta real implementatsiya" naqshi,
+object storage uchun. `docker-compose.yml`da allaqachon MinIO
+(`object-storage`) xizmati va `Settings.object_storage_endpoint`/
+`object_storage_bucket` bor edi — lekin bu sandbox'da Docker daemon
+umuman ishlamaydi (`docker ps`: "no such file or directory" socket'ga)
+va `boto3` o'rnatilmagan, demak S3 adapter yozib uni haqiqatda
+tekshirib bo'lmaydi (Telegram/Google/GCP bilan bir xil "yetib
+bo'lmaydi, shuning uchun soxtalashtirmaymiz" tamoyili). Shuning uchun
+v1 uchun yagona real, to'liq tekshirilgan implementatsiya —
+`LocalFilesystemObjectStorage`: kalitni SHA-256 bilan hash qilib
+ikki segmentli papka tuzilishiga (fan-out) yozadi — bu ataylab
+xavfsizlik uchun ham: caller bergan xom `key` HECH QACHON haqiqiy
+fayl yo'liga aylanmaydi (hash qilingani uchun `../../etc/passwd` kabi
+qiymat ham base_dir'dan chiqib keta olmaydi), sof validatsiyaga
+tayanmasdan strukturaviy himoya (`test_a_path_traversal_looking_key_
+never_escapes_the_base_dir` bilan real Postgres'siz, sof unit test
+darajasida tasdiqlangan).
+
+`doda.domain.knowledge.file_validation.validate_file` — FR-KNW-001'ning
+o'zagi. "Malware validatsiyasi" bu kod bazasida haqiqiy antivirus SKANI
+degani EMAS (bunday qobiliyat yo'q, va soxta bo'lishini da'vo qilish
+Master Instruction'ning "test qilinmagan xavfsizlik kafolatini da'vo
+qilma" qoidasini buzardi) — bu yerda aniq, tekshiriladigan narsa:
+fayl KENGAYTMASI, deklaratsiya qilingan Content-Type va HAQIQIY BAYTLAR
+(magic-byte imzo) uchtasi bir-biriga mos kelishi shart, VA ma'lum
+executable/skript imzolari (`MZ` — Windows PE, `\x7fELF` — Linux ELF,
+`#!` — shebang) har qanday deklaratsiya qilingan turdan qat'i nazar rad
+etiladi. Aynan shu oxirgi tekshiruv FR-KNW-001'ning o'z acceptance
+mezonini ("xavfsizlik testi") ta'minlaydi: Windows PE binary
+`invoice.pdf` nomi va `application/pdf` deklaratsiyasi bilan yuborilsa
+ham, uning haqiqiy baytlari PDF emasligi aniqlanib rad etiladi. Bu
+real HTTP orqali (`test_a_malicious_file_disguised_as_a_pdf_is_
+rejected_and_never_stored` — 422 qaytishi VA hech qanday Document
+qatori yaratilmasligi) VA sof unit darajasida (bir nechta fixture:
+ELF, shebang script, binary blob `.txt` deb yashiringan) tasdiqlandi.
+DOCX/XLSX'ning ikkalasi ham ZIP-konteyner (OOXML) bo'lgani uchun to'liq
+kontent-tur tekshiruvi (markaziy katalogni o'qib "word/"/"xl/" papkasini
+tasdiqlash) ataylab QURILMADI — bu haqiqiy, hujjatlashtirilgan bo'shliq
+(faqat ZIP imzosi tekshiriladi), spekulyativ chuqurlashtirish o'rniga
+aniq belgilab qo'yildi.
+
+`application/knowledge_service.py` — `ingest_file` (validate → storage
+→ DB qator, shu tartibda: agar storage'ga yozilgandan keyin DB insert
+qulasa, egasiz obyekt qoladi — zararsiz, hech kim unga yetolmaydi; teskari
+tartib DB qatori bor-u fayli yo'q "buzuq havola" holatini yaratardi, bu
+yomonroq), `list_documents_for_workspace`, `delete_document` (DB
+qatorini avval o'chirish, keyin storage'dan — xuddi shu "fail-safe"
+yo'nalish).
+
+`api/knowledge.py` — Task API'ning o'z authoritative-chain naqshi
+(`RequestContext`, `_get_owned_task`ning o'z nusxasi —
+`_get_owned_document`, boshqa workspace'ning hujjatiga 404). Yozish
+amallari (upload, delete) yangi `authorize_use_knowledge`ni talab
+qiladi (10.2'da FR-KNW uchun alohida qator yo'q — `authorize_use_chat`/
+`authorize_create_task`ning uchta rolini, Member/WorkspaceAdmin,
+aynan takrorlaydi, alohida aniq funksiya sifatida yozilgan — kelajakda
+FR-KNW o'ziga xos rol talab qilsa, uni qaysi funksiya qamrashini
+qayta izlash shart bo'lmasin deb); o'qish (list/get/download)
+esa boshqa har bir workspace-scoped ro'yxatlash kabi faqat a'zolikning
+o'zini talab qiladi. Fayl yuklash `python-multipart` (yangi dependency,
+FastAPI'ning `UploadFile`/multipart form parsing'i uchun runtime'da
+zarur — bu birinchi va yagona real fayl-yuklash endpoint uchun
+qo'shildi) orqali ishlaydi.
+
+Yangi 0024-migratsiya `knowledge_documents` jadvalini `task_tasks`/
+`conversation_conversations` bilan bir xil RLS shaklda (customer_id +
+workspace_id, FORCE ROW LEVEL SECURITY, tenant_isolation policy)
+qo'shdi — `migrations/env.py` va `test_rls_coverage.py`ning model-import
+ro'yxatiga ham kiritildi (aks holda RLS qamrov testi bu yangi domainni
+"ko'rmagan" bo'lardi). Migratsiya round-trip (0023→0024→0023→0024)
+qo'lda tekshirildi.
+
+Cross-workspace tenancy testi (`test_a_document_from_a_sibling_
+workspace_is_not_readable`) yangi fayl ochish o'rniga mavjud
+`test_cross_workspace_record_access.py`ga (uning o'z
+`_seed_two_workspaces_one_customer` yordamchisidan foydalanib)
+qo'shildi — bir xil customer ostidagi ikkita workspace holatini
+(RLS yordam bermaydi, faqat aniq `workspace_id` tekshiruvi) qamraydi,
+bu allaqachon shu faylning o'z, boshqa domenlar uchun o'rnatilgan
+naqshi.
+
+Frontend: workspace sahifasiga "Fayllar" bo'limi qo'shildi (yuklash
+formasi + ro'yxat, har biri "Yuklab olish"/"O'chirish" tugmasi bilan).
+`uploadDocument`/`downloadDocument` `apiFetch`dan MUSTAQIL yozildi
+(xuddi `streamConversationMessage` kabi) — `apiFetch` body mavjud
+bo'lsa har doim `Content-Type: application/json` qo'yadi, bu esa
+brauzerning o'zi multipart chegarasini (`boundary`) qo'yishi kerak
+bo'lgan `FormData` so'roviga zid keladi. `downloadDocument` mavjud
+`downloadJsonFile`ning Blob/createObjectURL/anchor-click naqshini
+takrorlaydi, lekin JSON o'rniga xom baytlarni (`response.blob()`)
+saqlaydi.
+
+Yangi, mustaqil Playwright E2E spec (`knowledge.spec.ts`, o'z seed
+prefiksi — `E2E_KNOWLEDGE_`, chunki bu spec haqiqiy Document qatorlarini
+yaratadi/o'chiradi) real backend+frontend'ga (production build) qarshi
+to'liq oqimni tasdiqladi: haqiqiy PDF yuklash → ro'yxatda ko'rinishi →
+yuklab olish (haqiqiy baytlar to'g'ri qaytishi, brauzerning haqiqiy
+yuklab olish hodisasi orqali) → Windows executable'ni `.pdf` deb
+yuklashga urinish rad etilishi (ro'yxatda ko'rinmasligi) → o'chirish.
+Barcha 15 E2E spec (14 mavjud + yangisi, accessibility skaneri bilan
+birga — yangi "Fayllar" bo'limi hech qanday WCAG buzilishi keltirmadi)
+fresh seed'ga qarshi yashil.
+
+`docs/risk-register.md`ning RISK-003 qatori yangilandi: memory/Knowledge
+domeni endi qisman mavjud (fayl saqlash), lekin hali hech narsa
+saqlangan kontentni AI promptiga o'qimaydi (FR-KNW-002+ hali yo'q),
+shuning uchun kontaminatsiya xavfi hamon dormant — faqat sabab
+aniqroq.
+
+527 test (498+29: 23 unit — `test_file_validation.py`, 5 unit —
+`test_local_filesystem_storage.py`, 6 integration — `test_knowledge_
+api.py` + `test_cross_workspace_record_access.py`ga 1 ta qo'shimcha),
+barchasi real Postgres'da; `ruff`/`mypy` toza; frontend `tsc`/ESLint/
+production build toza; barcha 15 E2E spec yashil.
+
+**FR-ADM (Administrator va platforma boshqaruvi, 3.9-bo'lim) — to'liq
+dizayn taklifi yozildi (`docs/design-proposals/FR-ADM-design-proposal.md`)
+va uning yagona haqiqatda qurilishi mumkin bo'lgan qismi — FR-ADM-005,
+AI byudjeti va limitlarni belgilash — amalga oshirildi.** TRD'ning o'z
+3.9-bo'limini (pandoc orqali) qayta o'qib, olti sub-talab (FR-ADM-001..006)
+har biri alohida baholandi, oldingi sessiyaning "FR-ADM hali qurilmagan"
+degan umumiy xulosasidan farqli, aniq toifalarga bo'lib:
+
+- **FR-ADM-001** (customer/workspace ro'yxati+holati paneli, "Admin
+  faqat o'z scope'idagi obyektlarni ko'radi") — allaqachon
+  QONDIRILGAN. Bu talab PLATFORM-darajasidagi admin panelini emas,
+  CustomerOwner'ning o'z customer'i doirasidagi ko'rinishini nazarda
+  tutadi deb o'qildi (2.2-bo'lim rol jadvalida `platform_owner` degan
+  tenant'dan yuqori primitiv umuman yo'q, va "faqat o'z scope'idagi"
+  mezoni aynan CustomerOwner'ning bugungi cheklovini tasvirlaydi) —
+  `/customers/{id}` sahifasi (workspace/a'zolar/kill switch/audit/AI
+  sozlamalari) bu talabni RLS+aniq customer_id tekshiruvlari orqali
+  allaqachon qamraydi.
+- **FR-ADM-002/003/004** (custom role+permission matritsa, connector
+  consent/scope, ABAC policy) — ATAYLAB QURILMADI. Uchtasi ham
+  bugungi RBAC modelini (fiksirlangan Python enum + qattiq yozilgan
+  `authorize_*` funksiyalar) tubdan qayta qurishni yoki umuman yangi
+  subsystem (ABAC policy engine, ko'p-connector consent modeli)
+  o'ylab topishni talab qiladi — bularning har biri uchun dizayn
+  taklif hujjatida aniq, javob berilishi kerak bo'lgan savollar
+  yozildi (masalan: custom role CustomerRole/WorkspaceRole'ni
+  ALMASHTIRADIMI yoki ustiga qo'shiladimi — bu javobga qarab butun
+  authz zanjiri qayta yozilishi yoki yozilmasligi mumkin).
+- **FR-ADM-005** ("AI byudjeti va limitlarni belgilash") —
+  **QURILDI**, quyida batafsil.
+- **FR-ADM-006** (feature flag + model routing) — QISMAN allaqachon
+  mavjud (model routing — `ai_preference_service`ning 4 pog'onali
+  ustuvorlik zanjiri, `PUT /v1/workspaces/{id}/ai-preference`,
+  o'zgarish darhol qo'llanadi), lekin bitta aniq bo'shliq topildi:
+  bu o'zgarish HECH QACHON audit qilinmaydi, talab esa aniq "audit
+  qilinadi" deydi — dizayn taklifiga kichik, keyingi qadam sifatida
+  yozildi (`ai_preference.workspace_set.v1` event turi qo'shish),
+  bu sessiyada QURILMADI (FR-ADM-006 o'zi "Should", bu hujjatning
+  maqsadi xaritalash, hammasini bir yo'la yopish emas). Feature-flag
+  yarmi — hech qanday umumiy mexanizm yo'q — yangi qaror talab qiladi.
+
+**FR-ADM-005 amalga oshirilishi**: `ai_budget_service.reserve_budget`
+allaqachon limitga yetganda bloklardi (`BudgetExceededError`/402), lekin
+limitning o'zi — `Settings.ai_budget_soft_usd_per_customer_month`/
+`ai_budget_hard_usd_per_customer_month` — BUTUN deployment uchun bitta,
+fiksirlangan qiymat edi, hech qanday customer o'zinikini o'zgartira
+olmasdi. Yangi `ai_budget_overrides` jadvali (0025-migratsiya,
+`ai_budget_ledgers`ning aynan bir xil "customer_id PRIMARY KEY" RLS
+shakli) — qatorning yo'qligi "deployment standarti qo'llanadi" degani,
+`workspace_language_settings`/`notification_preferences`ning "yo'qlik =
+standart" konventsiyasining takrori.
+
+`ai_budget_service._effective_caps_cents(session, customer_id)` — YANGI,
+markazlashtirilgan funksiya: override bo'lsa o'shani, bo'lmasa
+`Settings`dan o'qiydi. Muhimi: `reserve_budget` VA `get_budget_status`
+ikkalasi ham ENDI shu bitta funksiyani chaqiradi — avval ikkalasi
+mustaqil, o'z-o'zidan `Settings`ni o'qirdi (birga refaktor qilingan, chunki
+ikkita mustaqil o'qish qatori kelajakda jimgina bir-biridan uzoqlashib
+ketishi mumkin edi — "ko'rsatilgan qiymat" va "haqiqatda majburlangan
+qiymat" bir xil manbadan kelishi kerak, aks holda `get_budget_status`
+noto'g'ri raqam ko'rsatishi mumkin edi). Bu real, o'lchangan foyda
+sifatida test bilan tasdiqlandi
+(`test_the_override_is_enforced_not_just_reported` — juda past override
+o'rnatib, HAQIQIY `reserve_budget` chaqiruvi shu override bilan
+bloklanishini tekshiradi, faqat `get_budget_status`ning ko'rsatishini
+emas).
+
+`set_customer_ai_budget_override` — `soft_cap_usd <= 0`/`hard_cap_usd <=
+0` yoki `hard_cap_usd < soft_cap_usd` holatlarida yangi
+`InvalidBudgetOverrideError` (422 `INVALID_BUDGET_LIMITS`) ko'taradi —
+ikkinchi tekshiruv ("hard >= soft") DB darajasidagi cheklov emas, balki
+mantiqiy: aks holda soft-cap ogohlantirishi hard-cap allaqachon
+bloklagandan KEYIN paydo bo'lardi, ikkita limitning butun maqsadini
+buzib. Concurrency himoyasi — `notification_service.set_notification_
+preference`ning aynan bir xil `begin_nested`/`IntegrityError`/"oxirgi
+yozuvchi g'olib" naqshi (kill switch'ning "birinchi g'olib"idan farqli —
+bu yerda ham har bir chaqiruvchi O'Z qiymatini xohlaydi, umumiy
+"ta'minlash" emas).
+
+O'zgarish `ai_budget.override_set.v1`/`ai_budget.override_cleared.v1`
+sifatida audit qilinadi (`soft_cap_usd`/`hard_cap_usd` — sof raqamlar,
+`test_audit_redaction.py`ning allowlist'iga qo'shildi) — `set_workspace_
+language`ning "versiyalangan VA audit qilingan, faqat bittasi emas"
+mulohazasining takrori.
+
+`GET/PUT/DELETE /v1/customers/{id}/ai-budget-limits` — yangi
+`authorize_manage_ai_budget` (CustomerOwner-only, `authorize_manage_ai_
+provider_settings`bilan bir xil restriktivlik — Auditor ko'ra oladi,
+o'zgartira olmaydi, chunki bu moliyaviy nazorat, "sezgir emas"
+toifasiga kirmaydi) bilan himoyalangan.
+
+Frontend: customer sahifasining "AI provayderlar" bo'limiga (mavjud
+byudjet banneri va breakdown jadvalidan keyin) soft/hard cap formasi
+qo'shildi — "Standart qiymatga qaytarish" tugmasi faqat override
+mavjud bo'lganda ko'rinadi. Yangi Playwright qadam (`customer.spec.ts`)
+formani to'ldirib, backend'ning o'zidan (`GET .../ai-budget-limits`)
+override haqiqatda saqlanganini, keyin tozalangandan keyin `null`ga
+qaytganini tasdiqlaydi.
+
+Real backend+production frontend'ga qarshi (barcha 15 E2E spec, jumladan
+accessibility skaneri — yangi forma hech qanday WCAG buzilishi
+keltirmadi) tasdiqlandi. Migratsiya round-trip (0024→0025→0024→0025)
+qo'lda tekshirildi.
+
+533 test (527+6: `test_ai_budget_override.py`), barchasi real
+Postgres'da; `ruff`/`mypy` toza; frontend `tsc`/ESLint/production build
+toza; barcha 15 E2E spec yashil.
+
+**OD-004ning provayder tanlovi hujjatlashtirildi: Google Cloud
+Speech-to-Text/Text-to-Speech.** Product Owner "ovoz MVP uchun kerak"
+qarorini avvalroq bergan edi (bu paragraf yozilishidan oldin allaqachon
+CLAUDE.md/`docs/open-decisions.md`da qayd etilgan) — bu safar
+`AskUserQuestion` orqali ANIQ so'ralib, ikkinchi ochiq savol (qaysi
+provayder) ham hal qilindi, taxmin qilinmadi. `docs/open-decisions.md`ning
+OD-004 qatori shu qaror bilan, va yangi kontekst bilan (FR-CONV/chat
+UI shu sessiyaning o'zida keyinroq to'liq qurilgani — demak ovoz endi
+"mavjud bo'lmagan UI ustiga qurish" emas) yangilandi. `docs/risk-
+register.md`ning RISK-010 qatoriga ham qisqa qo'shimcha yozildi — bu
+risk endi matn-model sifat parite muammosidan tashqari, ovoz (STT/TTS)
+uchun ham amal qiladi.
+
+**Ataylab, ochiq qoldirilgan halol chegara**: haqiqiy amalga oshirish
+(Google Cloud Speech API'ga real chaqiruv, mikrofon-yozib-olish/audio-
+pleer UI) BOSHLANMADI — buning uchun haqiqiy GCP credential (service
+account kaliti yoki API kaliti) hali taqdim etilmagan. Bu Telegram bot
+tokeni/Google OAuth client secret'ining aynan bir xil kutish holati —
+kelib tushgandan keyin xavfsiz kanal orqali (hech qachon chat matniga
+yoki repo'ga yozilmasdan) `backend/.env`ga qo'yilishi kutilmoqda. Sof
+hujjat yangilanishi — kod o'zgarmadi, 533 test o'zgarishsiz.
+
+**FR-ADM-006ning model-routing yarmi endi to'liq — `docs/design-
+proposals/FR-ADM-design-proposal.md`ning o'zi taklif qilgan "keyingi
+kichik qadam" qurildi.** Talab: "O'zgarish darhol qo'llanadi va audit
+qilinadi." "Darhol qo'llanadi" yarmi allaqachon rost edi
+(`ai_preference_service`ning 4 pog'onali ustuvorlik zanjiri, keyingi
+chat burilishidan boshlab o'qiladi) — yetishmagani "audit qilinadi"
+yarmi edi: `PUT /v1/workspaces/{id}/ai-preference` va `PUT
+/v1/customers/{id}/me/ai-preference` hech qachon hech qanday audit
+yozuvi qoldirmasdi, garchi bu workspace'ning (yoki foydalanuvchining
+o'z) keyingi har bir chat burilishi qaysi providerga borishini
+belgilasa ham.
+
+`set_workspace_ai_preference`/`set_user_ai_preference` va ularning
+`clear_workspace_ai_preference`/`clear_user_ai_preference` juftlari
+endi `record_audit_event`ni chaqiradi (`ai_preference.workspace_set.v1`/
+`ai_preference.workspace_cleared.v1`/`ai_preference.user_set.v1`/
+`ai_preference.user_cleared.v1` — `ai_budget.override_set.v1`ning aynan
+o'zi naqshi, xuddi shu sababdan: "versiyalangan/o'rnatilgan-lekin-audit-
+qilinmagan" FR-ADM-005'ning o'zi allaqachon hal qilgan xato bo'lardi).
+"Clear" faqat haqiqatda mavjud bo'lgan qator o'chirilganda audit
+qilinadi — hech narsa o'rnatilmagan holatda DELETE chaqirilishi
+(no-op) trail'ga bo'sh, hech narsani tasvirlamaydigan yozuv
+qo'shmaydi. Workspace-scoped `set_workspace_ai_preference`/`clear_
+workspace_ai_preference`ga endi `actor_id` parametri ham qo'shildi
+(avval yo'q edi — workspace darajasidagi o'zgarish uchun "kim
+o'zgartirdi" degan aniq maydon zarur edi, `ctx.workspace.user_id`
+orqali chaqiruvchi API'dan uzatiladi).
+
+Testlar audit-zanjiri uslubida isbotlandi: workspace preference'ning
+`record_audit_event` chaqiruvini vaqtincha olib tashlab, yangi
+`test_setting_and_clearing_the_workspace_ai_preference_is_audited` aynan
+kutilgan tarzda (audit ro'yxatida `ai_preference.workspace_set.v1`
+yo'qligi bilan) muvaffaqiyatsiz bo'lishi ko'rsatildi, keyin qaytarib
+yashil ekani tasdiqlandi. Jami olti yangi test
+(`test_ai_settings_api.py`): ikkala tier (workspace, user) uchun ham
+set+clear audit trail'da ko'rinishi (workspace-scoped `GET .../audit`
+va customer-scoped `GET .../audit` orqali mos ravishda — user-darajasidagi
+test CustomerOwner bilan ishlatildi, chunki customer-wide audit'ni
+o'qish uchun 10.2 shuni talab qiladi, plain member emas — o'zgarishning
+o'zi plain member uchun ham xuddi shunday audit qilinadi, faqat bu
+testda o'sha caller o'z-o'zining o'zgarishini qayta o'qiy olmaydi), va
+`test_clearing_an_already_unset_workspace_ai_preference_is_not_audited`
+(no-op DELETE hech qanday yozuv qo'shmasligi).
+
+"provider"/"model" `test_audit_redaction.py`ning `ALLOWED_SAFE_
+METADATA_KEYS` ro'yxatiga qo'shildi (ikkalasi ham enum qiymati/model
+nomi — sezgir emas).
+
+536 test, barchasi real Postgres'da; `ruff`/`mypy` toza. Frontend
+o'zgarmadi (API javob shakli o'zgarmadi, faqat yangi audit yon-ta'siri
+qo'shildi) — mavjud E2E spec'lar buzilmaydi, alohida qayta ishga
+tushirilmadi (minimal, faqat-audit qo'shimchasi, kontraktga ta'sir
+qilmaydi).
+
+**O'n birinchi `security-review` o'tkazildi — 10-review'dan (476eb40)
+keyingi hamma narsaga qarshi: FR-KNW-001 (fayl yuklash domeni — bu
+guruhning eng katta yangi hujum sirti), FR-ADM-005 (byudjet override),
+FR-ADM-006 (preference audit).** Jarayon bir xil: topish subagent'i
+`file_validation.py`/`local_filesystem.py`/`api/knowledge.py`ni
+(path traversal, tenancy, magic-byte bypass'ga alohida e'tibor bilan)
+va qolgan yangi kodni to'liq o'qib chiqdi.
+
+Topish subagent'i bitta nomzod qaytardi: `api/knowledge.py`ning
+`upload_document`'i `file.read()`ni hajm limiti tekshirilishidan OLDIN
+to'liq xotiraga yuklaydi (`validate_file`ning o'z hajm tekshiruvi
+FAQAT shundan keyin ishga tushadi) — katta so'rov tanasi hajm
+chegarasidan oldin xotirani egallashi mumkin. Bu skill'ning o'z HARD
+EXCLUSION ro'yxatining #1 (DoS) va #4 (xotira/CPU tugatish)
+qatorlariga aynan mos keladi — filtrlash subagent'i chaqirilmasdan,
+to'g'ridan-to'g'ri chiqarib tashlandi (skill'ning o'z qoidasi bo'yicha,
+muhandislik qarori emas).
+
+Qolgan barcha tekshirilgan joylar (path traversal — key SHA-256 bilan
+hash qilinadi, filename hech qachon path component sifatida
+ishlatilmaydi; cross-workspace document access — `_get_owned_task`
+bilan bir xil naqsh; magic-byte bypass/served Content-Type xavfi —
+content_type har doim server tomonidan tasdiqlangan enum'dan keladi;
+SQL injection — to'liq parametrlashtirilgan; `ai_budget_overrides`/
+`get_usage_report`ning tenant izolyatsiyasi — ikkilamchi `customer_id`
+predikati; yangi endpoint'larning avtorizatsiyasi; frontend'ning
+`uploadDocument`/`downloadDocument`i — umumiy auth-header/xato
+yordamchilaridan foydalanadi) toza deb tasdiqlandi.
+
+**Natija: 0 topilma** — 4-, 6-, 7-, 9-, 10-review'lar bilan bir xil.
+
+536 test, barchasi real Postgres'da (kod o'zgarmadi — sof tekshiruv).
+
+**11-review'ning o'zi rasmiy hisobotdan chiqarib tashlagan DoS nomzodi
+alohida, muhandislik sifatida tuzatildi — skill'ning "DoS'ni xavfsizlik
+topilmasi sifatida hisobotga qo'shma" qoidasi buni "tuzatishga
+arzimaydi" demaydi, faqat "xavfsizlik hisobotida emas" deydi.**
+`api/knowledge.py`ning `upload_document`i `file.read()`ni HECH QANDAY
+hajm argumentisiz chaqirardi — butun so'rov tanasini `validate_file`ning
+o'z hajm tekshiruvi ishga tushishidan OLDIN to'liq xotiraga yuklab
+olardi. Demak plain `Member` roliga ega har qanday autentifikatsiyalangan
+foydalanuvchi (yuklash huquqiga ega bo'lgan eng past rol) katta
+so'rov tanasi yuborib, serverni uni rad etishdan OLDIN xotiraga
+yuklashga majbur qila olardi.
+
+Tuzatish: yangi `_read_bounded(file, max_size_bytes)` — 1 MiB'lik
+bo'laklarda o'qiydi, yig'indi limit'dan oshgan ZAHOTI (butun tanani
+o'qib bo'lgandan keyin emas) `FileTooLargeError` ko'taradi. `validate_
+file`ning o'z `len(data) > max_size_bytes` tekshiruvi o'zgarishsiz
+qoldi (u xom bytes bilan to'g'ridan-to'g'ri chaqiriladigan unit
+testlar tomonidan sinaladi) — faqat bu bytes'lar SHU tekshiruvga
+yetib borishidan oldin qanday yig'ilishi o'zgardi.
+
+**Isbotlash bu safar oddiy HTTP darajasidagi test bilan qilinmadi —
+chunki chekli (finite) so'rov tanasi bilan eski VA yangi kod bir xil
+422 natija beradi (ikkalasi ham oxir-oqibat rad etadi), demak oddiy
+HTTP test ikkisini farqlay olmaydi.** Shuning uchun yangi
+`tests/unit/test_read_bounded.py` cheksiz oqimni simulyatsiya qiladigan
+stub ishlatadi (`_EndlessStream`, har bir `read(n)` chaqiruvi doim `n`
+bayt qaytaradi, cheksiz) — bu asl regressiya sinfini (chekli emas,
+CHEKSIZ oqimni to'liq o'qishga urinish) haqiqatda ushlaydi. Revert-
+test-restore audit-zanjiri uslubida isbotlandi: `_read_bounded`ni
+vaqtincha "avval hammasini o'qi, keyin tekshir" ko'rinishiga
+qaytarganimda, test **butunlay osilib qoldi** (2 daqiqalik bash
+timeout'i bilan o'ldirildi) — bu faraziy emas, `_EndlessStream` uchun
+"oxirigacha o'qi" degani hech qachon tugamaydi, aynan shu xato sinfini
+aniq namoyish etadi. Tuzatish qaytarilgandan keyin test darhol
+(1 soniyadan kam) o'tdi. HTTP darajasida ham bir test qo'shildi
+(`test_a_file_over_the_size_limit_is_rejected_without_buffering_
+past_it`, `test_knowledge_api.py`) — bu funksional to'g'rilikni
+(chekli, lekin oshirilgan tana rad etilishi) tasdiqlaydi, garchi
+xotira-bog'lash xususiyatini o'zi isbotlamasa ham (buni yuqoridagi
+unit test qiladi).
+
+541 test, barchasi real Postgres'da; `ruff`/`mypy` toza. Frontend/API
+kontrakti o'zgarmadi (faqat server ichki o'qish strategiyasi) — E2E
+qayta ishga tushirilmadi.
+
+**FR-TASK-006 (task'ni evidence/fayl bilan bog'lash: "Bog'langan manba
+o'chirilsa task'da uzilgan havola belgilanadi") qurildi — yuqoridagi
+"ataylab qurilmagan" ro'yxatida "Knowledge/fayl domeni hali yo'q,
+bloklangan" deb aniq qayd etilgan edi, va FR-KNW-001 (fayl ingest) shu
+sessiyaning o'zida keyinroq qurilgani uchun endi bloklovchi sabab yo'q.**
+
+Qabul mezonining o'zi ("uzilgan havola belgilanadi", o'chirilmaydi/
+yashirilmaydi) `list_my_customers`ning "eskirgan index qatori" naqshi
+bilan bir xil falsafa: cross-domain havola o'chirilgan bo'lsa, xato
+bermasdan yoki jimgina yo'qotmasdan, aniq "broken" deb belgilab
+ko'rsatish. Bu `task_decisions`dan farqli — bu jadval MUTABLE (link
+o'chirilishi/detach qilinishi mumkin), append-only emas, chunki talab
+faqat "o'chirilgan manbaga havolani oqilona hal qilish"ni talab qiladi,
+havolaning o'zini abadiy saqlashni emas.
+
+`domain/task/models.py`ga `TaskAttachment` qo'shildi — `document_id`
+ATAYLAB xom UUID (ForeignKey emas), `Notification.reference_id`ning
+aynan bir xil cross-domain-reference naqshi: Task domeni Knowledge
+domenining implementatsiyasini import qilmaydi (6.2-bo'lim), faqat
+ID orqali bog'lanadi. `test_domain_isolation.py`ning AST tekshiruvi
+faqat `src/doda/domain/*/` ostidagi fayllarni cheklaydi — bu qoida
+`application/task_service.py`ning `doda.domain.knowledge.models.Document`ni
+import qilishiga xalaqit bermaydi (tasdiqlandi, `list_task_attachments`/
+`attach_document_to_task` shu importni ishlatadi).
+
+0026-migratsiya `task_attachments` jadvalini (customer_id + workspace_id
++ task_id FK + document_id bare UUID + attached_by) `task_tasks`ning
+aynan bir xil RLS shaklida (FORCE ROW LEVEL SECURITY, `tenant_isolation`
+policy) qo'shdi — append-only trigger YO'Q (mutable link). Round-trip
+(0025→0026→0025→0026) qo'lda tekshirildi.
+
+`task_service.attach_document_to_task` — `TaskParentNotFoundError`ning
+aynan bir xil cross-tenant-existence-oracle himoyasi: `document_id`ning
+HAQIQATDA shu task'ning workspace'iga tegishli ekanini (RLS customer_id
+bo'yicha bloklaydi, lekin bir xil customer'ning boshqa workspace'idagi
+document'ini bog'lashga yo'l qo'ymaydi) tekshiradi, aks holda
+`TaskAttachmentDocumentNotFoundError` → 404 — boshqa workspace'ning
+hujjati mavjudligini oshkor qilmasdan. `list_task_attachments` har bir
+link uchun `Document`ni qidiradi; topilmasa (`broken=True`) filename/
+content_type/size_bytes `None` bilan qaytadi, lekin LINK QATORI
+o'chirilmaydi/yashirilmaydi. `ResolvedTaskAttachment`
+(`dataclasses.dataclass(frozen=True)`) — `MyCustomerEntry`/`BudgetStatus`
+bilan bir xil "read-model qaytish turi" naqshi.
+
+`POST/GET /v1/workspaces/{id}/tasks/{task_id}/attachments`,
+`DELETE .../attachments/{attachment_id}` — mavjud `authorize_task_
+mutation` (task egasi yoki workspace_admin) bilan himoyalangan yozish
+uchun, o'qish esa workspace a'zoligining o'zi yetarli (boshqa har bir
+task-scoped ro'yxatlash bilan bir xil).
+
+**Ikkita real xato o'zida topildi va yozishdan OLDIN tuzatildi** (test
+ishga tushirilmasdan, kodni ko'rib chiqishda): (1) test uchun ATAYLAB
+`client.post("/v1/workspaces", ...)` orqali ikkinchi workspace yaratishga
+urindim — `grep`dan tasdiqlandi, bunday HTTP endpoint UMUMAN mavjud emas
+(workspace yaratish ataylab public API orqali ochilmagan). Tuzatildi:
+yangi cross-workspace testni `test_tasks_api.py`dan `test_cross_
+workspace_record_access.py`ga ko'chirib, uning mavjud `_seed_two_
+workspaces_one_customer()` yordamchisidan foydalanib. (2) `attach_task_
+document`ning birinchi qoralamasi `[resolved] = await list_task_
+attachments(...)`ni chaqirib, "har doim aynan bitta attachment bor" deb
+noto'g'ri taxmin qilgan edi — bir nechta mavjud attachment bo'lsa
+buzilardi. `attach_document_to_task`ning o'zi allaqachon tasdiqlangan
+`Document` obyektiga ega bo'lgani uchun to'g'ridan-to'g'ri to'liq
+`ResolvedTaskAttachment` qaytarishga o'zgartirildi — xato ham, ortiqcha
+ikkinchi DB round-trip ham yo'qoldi.
+
+Revert-test-restore uslubida isbotlandi: `list_task_attachments`ning
+`broken=document is None`ini vaqtincha `broken=False`ga qattiq bog'lab,
+`test_deleting_the_linked_document_marks_the_attachment_broken_not_
+missing` aynan kutilgan tarzda muvaffaqiyatsiz bo'lishi ko'rsatildi,
+keyin qaytarib yashil ekani tasdiqlandi. Olti yangi HTTP test
+(`test_tasks_api.py`): bog'lash+ro'yxatda ko'rinish, o'chirilgan hujjat
+broken deb belgilanishi (yo'qolmasdan), egasi bo'lmagan oddiy a'zo rad
+etilishi, qo'shni workspace'ning task'iga 404, detach qilish ro'yxatdan
+olib tashlashi, boshqa task'ga tegishli attachment_id 404. Bitta yangi
+test `test_cross_workspace_record_access.py`da (bir xil customer,
+boshqa workspace'ning hujjatini bog'lashga urinish — `TaskAttachment
+DocumentNotFoundError`).
+
+Frontend: har bir task qatoriga "Bog'langan fayllar"/"Fayllarni
+yashirish" toggle qo'shildi (Tarix/Qarorlar/Eslatmalar bilan bir xil
+naqsh) — mavjud attachment'lar ro'yxati (`data-testid="attachment-list"`,
+buzilganlar qizil "Uzilgan havola (fayl o'chirilgan)" bilan, sog'lomlari
+filename bilan), "Uzish" tugmasi, va yangi bog'lash formasi (mavjud
+`documents` state'idan to'ldirilgan `<select>`).
+
+Yangi, mustaqil Playwright E2E spec (`task-attachments.spec.ts`, o'z
+seed prefiksi — `E2E_ATTACH_`, chunki bu spec haqiqiy Document qatorini
+yaratadi/o'chiradi va o'zining task'ini yaratadi, `workspace.spec.ts`ning
+"E2E test task"i bilan kesishmasligi uchun): fayl yuklash+task yaratish
+→ bog'lash (linked, broken emas) → hujjatni o'chirish → panelni
+yopib-ochib (stale client cache emasligini isbotlash uchun) "Uzilgan
+havola" ko'rinishi, filename esa yo'qolishi → uzish → bo'sh holat.
+
+**E2E to'liq suite ishga tushirilganda IKKITA muvaffaqiyatsizlik
+chiqdi — bittasi seed-qayta-ishlatish artefakti (yangi spec'ni bitta
+o'zi, keyin qayta seed qilmasdan butun suite bilan ikkinchi marta ishga
+tushirganim uchun "E2E attachment task" ikki marta yaratilgan edi —
+`workspace.spec.ts`ning "E2E test task"i duplikatsiyasi kabi allaqachon
+bir necha marta hujjatlashtirilgan naqsh, kod xatosi emas — toza seed
+bilan darhol yo'qoldi), ikkinchisi esa HAQIQIY, avvaldan mavjud bo'lgan
+xato edi (mening bu sessiyadagi o'zgarishlarimga aloqasi yo'q, lekin
+toza seed bilan IKKI MARTA ketma-ket takrorlanib tasdiqlandi).**
+
+`customer.spec.ts`ning FR-ADM-005 qadami ("byudjet limitlarini o'rnatib,
+standart qiymatga qaytarish") toza seed bilan ham izchil
+muvaffaqiyatsiz bo'ldi: `"budget caps must be positive"` xatosi —
+holbuki test aniq "15"/"30" (ikkalasi ham musbat) kiritadi. Sabab
+`customers/[id]/page.tsx`ning `refresh()` funksiyasida: bu funksiya
+SAHIFADAGI HAR QANDAY mutatsiyadan keyin (kill switch yoqish/o'chirish,
+a'zo qo'shish va h.k.) chaqiriladi va o'zining `getAiBudgetLimits(...)
+.then(...)` filiali HAR SAFAR `softCapInput`/`hardCapInput`ni serverdan
+kelgan qiymat bilan SHARTSIZ almashtirardi. `refresh()`ning bu chaqiruvlari
+fire-and-forget (kutilmaydi) — demak FR-ADM-005 qadamidan OLDIN sodir
+bo'lgan kill switch qadamining o'z `refresh()`i hali НАВБАТДА (tarmoq
+round-trip'i tugamagan) bo'lishi mumkin edi, va foydalanuvchi budjet
+maydonlariga "15"/"30" kiritib bo'lgandan KEYIN javob qaytib, maydonlarni
+jimgina "" ga qaytarib qo'yardi — "Saqlash" bosilganda `Number("")` =
+0 yuborilib, backend'ning "musbat bo'lishi shart" tekshiruvi (to'g'ri
+ishlab) rad etardi. Bu haqiqiy, takrorlanuvchi race edi — flake emas
+(ikkinchi to'liq-toza-seed ishga tushirishda ham AYNAN shu joyda,
+AYNAN shu xato bilan qizardi).
+
+Tuzatish: yangi `budgetLimitsLoadedRef` (`useRef(false)`) — server'dan
+kelgan qiymat faqat BIRINCHI marta (sahifa ochilganda) `softCapInput`/
+`hardCapInput`ga yoziladi; keyingi HAR QANDAY `refresh()` chaqiruvi
+(budjet bilan aloqasi bo'lmagan mutatsiyalardan kelib chiqqan bo'lsa
+ham) foydalanuvchi tahrirlayotgan maydonlarga tegmaydi.
+`handleClearBudgetLimits`ning o'zining aniq, foydalanuvchi-boshlagan
+reset'i (`setSoftCapInput("")`/`setHardCapInput("")` muvaffaqiyatli
+tozalashdan keyin) o'zgarishsiz qoldi — bu ataylab, ref bilan
+cheklanmagan.
+
+Tuzatish real, ikki marta ketma-ket toza-seed'li to'liq E2E ishga
+tushirish bilan isbotlandi: tuzatishdan OLDIN 16 ta spec'dan 1 tasi
+(`customer.spec.ts`) izchil muvaffaqiyatsiz bo'lardi (frontend qayta
+build+start qilingandan keyin ham), tuzatishdan KEYIN (qayta build+
+qayta start, toza seed) barcha 16 ta spec yashil.
+
+548 test (backend, real Postgres'da), barchasi yashil; `ruff`/`mypy`
+toza; frontend `tsc`/ESLint toza, production build muvaffaqiyatli;
+barcha 16 E2E spec (15 mavjud + yangi `task-attachments.spec.ts`) real
+backend+frontend'ga (production build) qarshi yashil.
+
+**O'n ikkinchi `security-review` o'tkazildi — FR-TASK-006'ning o'z diff'iga
+qarshi (bounded-read tuzatishidan keyingi yagona commit), yangi authz
+zanjiriga (`attach_document_to_task`ning cross-workspace himoyasi, yangi
+ikkita endpoint'ning tenancy tekshiruvi) alohida e'tibor bilan.**
+Natija: **0 topilma**. Aniq tekshirilgan va to'g'ri ekani tasdiqlangan:
+(1) `attach_document_to_task`ning `document.workspace_id != task.
+workspace_id` tekshiruvi — `task` allaqachon `_get_owned_task` orqali
+`ctx.workspace.workspace_id`ga tekshirilgan holda yuklangani uchun, bu
+bir xil customer'ning boshqa workspace'idagi hujjatni to'g'ri rad etadi
+(RLS'ning o'zi buni ushlay olmaydigan aynan shu holat); cross-customer
+hujjat esa RLS tomonidan tekshiruvdan OLDIN allaqachon bloklanadi
+(`session.get` `None` qaytaradi). (2) `GET .../attachments` faqat
+ro'yxat, `task_id`ning o'zi `_get_owned_task` orqali allaqachon
+tasdiqlangan; `DELETE .../attachments/{id}` esa `_get_owned_attachment`
+orqali HAM `task_id`, HAM `workspace_id`ni tekshiradi — attachment_id'ni
+boshqa task_id yoki workspace bilan URL orqali almashtirib bo'lmaydi.
+(3) Ikkalasi ham `authorize_task_mutation` (task egasi yoki
+workspace_admin) bilan himoyalangan — oddiy a'zo bog'lay/uza olmaydi.
+(4) Yangi schema/endpoint'larda injection/path-traversal/type-confusion
+yo'q — barcha identifikatorlar `uuid.UUID` orqali tiplangan, hujjat
+qidiruvi parametrlashtirilgan ORM `session.get`.
+
+548 test o'zgarishsiz (kod o'zgarmadi — sof tekshiruv).
+
+**Beshinchi `/simplify` ko'rib chiqish o'tkazildi — oxirgi simplify'dan
+(`1b89756`) keyingi barcha commit'larga qarshi (55 fayl, ~4300 qo'shilgan
+qator: FR-ADM design proposal + FR-ADM-005 byudjet limitlari, FR-KNW-001
+fayl ingest domeni, OD-004 provayder qarori, va 12-security-review).**
+Jarayon: 4 ta parallel review agent (reuse/simplification/efficiency/
+altitude). **Bu safar hisobning o'z usage limit'iga (429, "resets
+4:10pm UTC") ikkita agent (reuse, simplification) o'rtada duch keldi** —
+reuse agent o'z to'liq hisobotini ALLAQACHON yetkazib bo'lgandan KEYIN
+keyingi bir amalda xato berdi (uning hisoboti shuning uchun to'liq va
+ishlatiladigan), simplification agent esa hech qanday hisobot
+yetkazmasdan xato berdi (bu burchakdan natija yo'q). Efficiency va
+altitude ikkalasi ham to'liq ishladi (altitude — 0 topilma).
+
+**Reuse (3 ta topilma, uchtasi ham tuzatildi):**
+1. `api/ai_settings.py`ning `get_ai_budget_limits`/`set_ai_budget_limits`i
+   `AIBudgetLimitsOut(...)`ni ikki joyda (bittasi `None`-holat uchun,
+   ikkinchisi to'ldirilgan holat uchun) mustaqil qurgan edi —
+   `_to_provider_status_out`ning aynan bir xil konventsiyasi bilan
+   `_to_budget_limits_out(override)` yordamchisiga chiqarildi.
+2. `frontend/src/lib/api.ts`ning `downloadDocument` (FR-KNW-001) va
+   `downloadJsonFile` (FR-CTL-002/FR-AUD-005) bir xil Blob/
+   createObjectURL/anchor-click/revokeObjectURL ketma-ketligini
+   mustaqil yozgan edi — `triggerBlobDownload(filename, blob)`
+   yordamchisiga chiqarildi, ikkalasi ham shuni chaqiradi.
+3. `task_service.py`ning `attach_document_to_task` va `list_task_
+   attachments`i `ResolvedTaskAttachment(...)`ni `(attachment,
+   document)` juftligidan ikki joyda mustaqil qurgan edi (bittasi
+   inline, `broken=False` qattiq yozilgan; ikkinchisi sikl ichida,
+   `broken=document is None`) — `_resolve_attachment(attachment,
+   document)`ga chiqarildi, ikkalasi ham shuni chaqiradi.
+
+**Efficiency (2 ta topilma tuzatildi, 1 tasi ataylab o'tkazib
+yuborildi):**
+1. `workspaces/[id]/page.tsx`ning `handleAttachDocument`i muvaffaqiyatli
+   POST'dan keyin butun attachment ro'yxatini `getTaskAttachments`
+   orqali qayta so'rardi — holbuki `attachTaskDocument`ning o'zi
+   allaqachon to'liq `TaskAttachmentOut`ni qaytaradi. Endi shu
+   qaytarilgan obyekt to'g'ridan-to'g'ri mavjud state massiviga
+   qo'shiladi, qayta so'rovsiz.
+2. `handleDetachDocument`i ham xuddi shunday, muvaffaqiyatli DELETE'dan
+   (204, hech narsa qaytarmaydi) keyin butun ro'yxatni qayta so'rardi —
+   endi o'chirilgan attachment mahalliy `filter` bilan state'dan olib
+   tashlanadi.
+3. `api/knowledge.py`ning `_read_bounded`i (11-security-review'ning
+   o'z bounded-read tuzatishi) bo'laklarni ro'yxatga yig'ib, oxirida
+   `b"".join(chunks)` qiladi — bu limit yaqinidagi fayl uchun cho'qqi
+   xotirani vaqtincha ikki baravar qiladi. Ataylab **tuzatilmadi**:
+   bu fixning o'z maqsadi (cheksiz o'qishni chegaralash) allaqachon
+   erishilgan, xotira-tejash ikkinchi darajali va marjinal, va bu fayl
+   yaqindagina diqqat bilan (audit-zanjiri uslubida) xavfsizlik
+   tuzatishining predmeti bo'lgan — sababsiz qayta tegish xavf-foyda
+   nisbatiga mos emas.
+
+**Altitude**: 0 topilma — bu safar chindan ham toza.
+
+**Simplification**: bu burchakdan hech qanday natija yo'q (agent
+hisobot yetkazmasdan rate-limit bilan tugadi). Qayta ishga tushirish
+o'rniga (limit shu zahoti qayta urilishi mumkin edi) mavjud 3 burchak
+bilan davom etildi — bu burchak keyingi `/simplify` pass'ida qamrab
+olinishi mumkin.
+
+Tuzatishlardan keyin: 548 test (backend, real Postgres'da) o'zgarishsiz
+o'tdi; `ruff format`/`ruff check`/`mypy src/doda` toza; frontend
+`tsc --noEmit`/ESLint/production build toza; barcha 16 E2E spec
+(`task-attachments.spec.ts` ham — aynan tuzatilgan `_resolve_attachment`
+yo'lini ishlatadi) real backend+frontend'ga (production build, barcha
+11 mustaqil seed prefiksi bilan) qarshi qayta ishga tushirilib yashil.
+
+**O'n uchinchi `security-review` o'tkazildi — beshinchi `/simplify`
+pass'ining o'z diff'iga (`2046280..757f0c7`, 5 fayl, sof refaktor)
+qarshi.** Diapazon tor va aniq: uchta yordamchi funksiya chiqarish
+(`_to_budget_limits_out`, `_resolve_attachment`,
+`triggerBlobDownload`) va frontend'ning ikkita handler'i endi mutatsiya
+javobidan to'g'ridan-to'g'ri state yangilashi — hech biri xatti-harakat
+o'zgartirishga mo'ljallanmagan edi. Topish subagent'i har uch backend
+yordamchisini o'z chaqiruv nuqtalari bilan solishtirib (avtorizatsiya
+tekshiruvi ikkalasida ham helper chaqirilishidan OLDIN, o'zgarishsiz;
+`_resolve_attachment`ning `broken=False` yo'li hamon faqat `document`
+isbotlangan holda non-None bo'lgan yo'ldan chaqiriladi) va frontend
+o'zgarishini (mutatsiya javobi — xuddi shu authorized so'rovning o'zi,
+boshqa kamroq cheklangan endpoint emas) tekshirdi.
+
+**Natija: 0 topilma** — 4-, 6-, 7-, 9-, 10-, 11-review'lar bilan bir xil.
+
+548 test, barchasi real Postgres'da (kod o'zgarmadi — sof tekshiruv).
+
+**FR-ACT-001'ning o'z qabul mezoni — "Registrda bo'lmagan tool
+chaqiruvi rad etiladi va audit qilinadi" — haqiqatda bajarilmasdi.**
+TRD'ning FR-ACT bo'limini (3.6) qayta o'qib chiqishda aniqlandi:
+`conversation_service.py`ning tool-round handling'i `write_calls`/
+`read_calls`ni `is_write_tool`/`is_read_tool` orqali filtrlaydi, lekin
+model biror registrga kirmagan tool nomini (masalan, haqiqatda mavjud
+bo'lmagan `delete_all_customer_data`) chaqirsa, bu chaqiruv IKKALA
+ro'yxatdan ham chiqib qoladi — na `dispatch_read_tool`ning o'z
+`ToolNotFoundError`i (bu faqat `_READ_TOOL_ARGS`da RO'YXATGA OLINGAN,
+lekin argumentlari yaroqsiz tool uchun yetib boradi, chunki
+`is_read_tool` filtri allaqachon registrga kirganlarni saralab bo'ladi),
+na hech qanday audit yozuvi ishga tushmaydi. Amaliy oqibat ikki qavatli:
+(1) FR-ACT-001'ning o'z talabi — rad etish VA audit — ikkalasi ham
+sodir bo'lmaydi, chaqiruv shunchaki JIMGINA yo'qoladi; (2) keyingi
+raund modelning o'ziga shu javobsiz qolgan `tool_call_id` bilan tarix
+yuboriladi — ko'pchilik provayder API'lari (OpenAI/Anthropic/Gemini)
+buni o'zi rad etadi, chunki ular har bir `tool_call`ga mos `tool`
+roli javobini talab qiladi.
+
+Tuzatish: `stream_message`ning tool-round handling'iga uchinchi,
+`unregistered_calls` ro'yxati qo'shildi (`is_write_tool`/`is_read_tool`
+ikkalasiga ham kirmagan chaqiruvlar). Har biri uchun: (1)
+`record_audit_event` chaqiriladi (`ai_tool.unregistered_call_
+rejected.v1`, `safe_metadata={"tool_name": ...}` — bu kalit
+`test_audit_redaction.py`ning ruxsat ro'yxatida allaqachon bor edi),
+(2) `dispatch_read_tool`ning yaroqsiz-argument yo'li bilan bir xil
+shaklda TOOL-role xato xabari (`"Tool error: '<nom>' is not a
+registered tool."`) yoziladi va tarixga qo'shiladi — modelga har doim
+har bir `tool_call_id` uchun javob berilishini ta'minlab, "javobsiz
+tool_call" holatini oldini oladi.
+
+Audit-zanjiri uslubida isbotlandi: tuzatishni vaqtincha `git stash`
+bilan olib tashlab, yangi test
+(`test_a_call_to_an_unregistered_tool_is_rejected_and_audited`) aynan
+kutilgan tarzda muvaffaqiyatsiz bo'lishini ko'rsatdim
+(`roles == ['USER', 'ASSISTANT', 'ASSISTANT']` — TOOL yozuvi umuman
+yo'q, uch elementli, kutilgan to'rt o'rniga), keyin tuzatishni qaytarib
+yashil ekanini tasdiqladim. Test HAM to'liq turn muvaffaqiyatli
+yakunlanishini (`gateway.calls == 2` — cheksiz tsiklga tushmasligi),
+HAM to'g'ri TOOL xabar matnini, HAM `GET .../audit?event_type=ai_tool.
+unregistered_call_rejected.v1` orqali audit yozuvining haqiqatda
+mavjudligini va `safe_metadata`sining to'g'riligini tekshiradi.
+
+549 test, barchasi real Postgres'da; `ruff`/`mypy` toza. Frontend/API
+kontrakti o'zgarmadi (yangi filial faqat model o'zi hech qachon
+mavjud bo'lmagan tool nomini chaqirganda ishga tushadi — bu holat
+E2E'ning haqiqiy `NullModelGateway`/chat oqimida hech qachon
+yuzaga kelmaydi) — E2E qayta ishga tushirilmadi.
+
+**O'n to'rtinchi `security-review` o'tkazildi — FR-ACT-001 tuzatishining
+o'z diff'iga qarshi (yangi kod yo'li, sof refaktor emas).** Tekshirilgan
+va to'g'ri ekani tasdiqlangan: (1) `call.name` (model-boshqaradigan,
+ishonchsiz) faqat ikkita joyga boradi — `Message.content` f-string (ORM
+TEXT maydoni, xom SQL emas) va `safe_metadata["tool_name"]` (allaqachon
+ruxsat etilgan kalit, boshqa har bir chaqiruv bilan bir xil canonical-
+JSON-hash quvuriga tushadi); (2) yangi filial hech qanday bajarish
+yo'liga (`dispatch_read_tool`/`propose_write_tool_action`) murojaat
+qilmaydi — faqat audit yozadi va rad etish xabarini qaytaradi, demak
+chetlab o'tiladigan avtorizatsiya sirti umuman yo'q; (3) audit
+yozuvining `customer_id`/`workspace_id`/`actor_id`si to'liq
+`workspace_context`dan keladi, `call.name` faqat `safe_metadata`ga
+tushadi — tenant-lararo audit yozish yo'li yo'q.
+
+**Natija: 0 topilma.**
+
+549 test, barchasi real Postgres'da (kod o'zgarmadi — sof tekshiruv).
+
+**FR-AUTH-009 (Service Actor uchun alohida machine credential oqimi, Must)
+qurildi — traceability auditning "41 ta hech qayerda tilga olinmagan"
+ro'yxatidagi yana bir ID, va 2.2-bo'limning o'z rol jadvalida allaqachon
+"Service Actor: mashina identifikatori... Eng yuqori risk darajasi: R2
+(approval bera olmaydi)" deb aniq belgilangan, ammo `domain/security/
+roles.py`ning o'z docstring'i tomonidan "hech qanday HTTP-facing use
+case'i yo'q" deb ochiq qoldirilgan edi.** Boshqa OD-* qarorlaridan
+(Telegram, Google OAuth) farqli, bu yerda tashqi provayder yoki yangi
+Product Owner qarori kerak emas edi — bu sof ichki kredensial mexanizmi,
+shuning uchun QOIDA 2'ni buzmasdan amalga oshirildi.
+
+2.2-bo'limning o'z "MUHIM INVARIANT" qutisi: "Service Actor hech qachon
+approval bera olmaydi va step-up authentication o'tay olmaydi." Bu ikkala
+cheklov ham **rol emas, Session'ning o'zining yangi `actor_kind` maydoni**
+orqali amalga oshirildi (`ActorKind.HUMAN`/`ActorKind.SERVICE`,
+0027-migratsiya) — chunki Service Actor'ning `CustomerMembership.role`si
+oddiy `MEMBER` (yangi `CustomerRole` qiymati YO'Q, ripple-effekt xavfisiz):
+agar cheklov rol orqali amalga oshirilganida, kelajakda kimdir Service
+Actor'ning workspace a'zoligiga `workspace_admin` bersa (texnik jihatdan
+hech narsa buni to'smaydi), cheklov jimgina chetlab o'tilgan bo'lardi.
+
+`domain/identity/models.py`ga `ServiceActorCredential` qo'shildi —
+`workspace_tenant_index`/`user_customer_index`ning aynan bir xil
+"chicken-and-egg" mulohazasi bilan ATAYLAB RLS'siz (
+`test_rls_coverage.py`ning to'rtinchi hujjatlashtirilgan istisnosi):
+taqdim etilgan secret'ni tekshirish customer_id ma'lum bo'lishidan OLDIN
+sodir bo'lishi kerak. `application/service_actor_service.py`:
+`create_service_actor_credential` (mashina uchun yangi, haqiqiy bo'lmagan
+OIDC subject bilan `User` yaratadi, keyin `customer_service.invite_
+customer_member`ning O'ZINI qayta ishlatib CustomerMembership+
+UserCustomerIndex'ni yozadi — parallel, ikkinchi yozish yo'li ixtiro
+qilinmadi), `authenticate_service_actor` (sha256 hash bo'yicha qidiruv —
+`identity_service.hash_oidc_subject`bilan bir xil "256-bit tasodifiy
+token uchun tuzsiz hash yetarli" mulohaza), `list_/revoke_service_actor_
+credential`.
+
+Ikkala invariant markazlashtirilgan, mavjud chokepoint'larda amalga
+oshirildi: (1) `authz_service.authorize_consume_approval` endi
+`actor_kind` parametrini oladi va `SERVICE` bo'lsa DENY qiladi — ROL yoki
+self-approval tekshiruvidan OLDIN, chunki bu shartsiz taqiq (Service
+Actor o'zining R0-R2 action'ini "self-approve" qilishga urinishi ham
+bloklanishi kerak, garchi u hech qachon R3+ propose qila olmasa ham —
+ikkinchi qatlam sifatida); (2) `action_service.propose_action` endi
+`actor_kind`ni oladi va SERVICE uchun `risk_level not in AUTO_APPROVED_
+RISK_LEVELS` (R0-R2) bo'lsa `ServiceActorRiskLevelExceededError`
+(403) ko'taradi — bu ro'yxat allaqachon mavjud edi (9.1'ning "R0-R2:
+policy-only" ta'rifi), 2.2'ning "eng yuqori risk darajasi R2" talabi
+bilan aynan mos kelgani uchun yangi ro'yxat ixtiro qilinmadi.
+
+`POST /v1/auth/service-actor` (secret'ni Session'ga almashtiradi, doim
+AAL1 — mashinada MFA faktori yo'q) va `POST/GET/DELETE /v1/customers/
+{id}/service-actors[...]` (yangi `authorize_manage_service_actors`,
+CustomerOwner-only — kill switch/audit-viewer/archived-workspace'lar
+bilan bir xil "10.2'da alohida qator yo'q, eng restriktiv precedentga
+ergashiladi" mulohazasi). Secret faqat yaratishda BIR MARTA qaytariladi
+(`Approval.nonce`ning aynan bir xil bir martalik-ko'rsatish shakli).
+
+Ikkala invariant ham audit-zanjiri uslubida isbotlandi: (1)
+`authorize_consume_approval`ning SERVICE tekshiruvini vaqtincha
+o'chirib, real HTTP orqali (SERVICE session workspace_admin sifatida
+qo'shilib, HAQIQIY R3 action'ning approval'ini AAL1 va notug'ri bo'lmagan
+nonce bilan iste'mol qilishga urinib) test aynan kutilgan, lekin
+YANGI narsani ochib bergan tarzda muvaffaqiyatsiz bo'ldi: `DENY` o'rniga
+`STEP_UP_REQUIRED` qaytdi — ya'ni bu tekshiruvsiz, bugun Service Actor
+faqat TASODIFAN (hech qanday sessiya AAL2'ga yetolmagani uchun)
+bloklangan bo'lar edi, kelajakda MFA/step-up oqimi qurilsa (FR-AUTH-002/
+008) bu tasodifiy to'siq yo'qolib, shartsiz taqiq buzilgan bo'lardi. (2)
+`propose_action`ning R2-cap tekshiruvini o'chirib, Service Actor R3
+`email.send` action'ini HAQIQATDA `AWAITING_APPROVAL`gacha yetkaza
+olishini (`200` va `assert 200 == 403` xatosi bilan) ko'rsatdim. Ikkalasi
+ham qaytarilib, yashil ekani tasdiqlandi.
+
+557 test (549+8: 1 unit — `test_authz_service.py`, 7 integration —
+`test_service_actors_api.py`), barchasi real Postgres'da. Migratsiya
+round-trip (0026→0027→0026→0027) qo'lda tekshirildi. `ruff`/`mypy` toza.
+
+Frontend'ga hech narsa qo'shilmadi — bu talab (FR-AUTH-009) mohiyatan
+mashina-mashinaga API oqimi, inson UI'si yo'q (2.2: "interaktiv human
+session sifatida ishlamaydi").
+
+**Ataylab qolgan bo'shliq**: `CurrentIdentity`/`GET /v1/sessions`ning o'zi
+`actor_kind`ni hali ko'rsatmaydi (faqat ichki, `RequestContext` orqali
+enforcement uchun ishlatiladi) — bu kosmetik, funksional bo'shliq emas.
+
+**O'n beshinchi `security-review` o'tkazildi — yuqoridagi FR-AUTH-009 commit'iga
+qarshi, va HAQIQIY, jiddiy bo'shliq topildi: R2-cap ikkinchi, mustaqil chaqiruv
+yo'lida umuman ishlamas edi.** `authorize_consume_approval`/`propose_action`ga
+qo'shilgan `actor_kind` tekshiruvlari faqat `POST /v1/workspaces/{id}/actions`ning
+to'g'ridan-to'g'ri yo'lini (`api/actions.py`) qamragan edi — lekin `propose_action`ning
+IKKINCHI, mustaqil chaqiruvchisi bor: `ai_tools.propose_write_tool_action`, chat
+orkestratsiyasining (`conversation_service.stream_message`) o'zi model bir yozish
+tool'ini (masalan `telegram.send_message`) chaqirganda ishlatadi. Bu chaqiruv
+`actor_kind`ni umuman uzatmagani uchun `propose_action`ning o'z default qiymati
+(`ActorKind.HUMAN`) jimgina qo'llanardi.
+
+**Haqiqiy, konkret ekspluatatsiya stsenariysi**: CustomerOwner Service Actor
+kredensialini yaratib, uni oddiy workspace a'zosi sifatida qo'shsa (aynan
+"botni shu workspace'ning chatiga qo'shish" kabi oqilona, kutilgan sozlash) —
+Service Actor `POST /v1/auth/service-actor` orqali autentifikatsiyadan o'tib,
+`POST .../conversations/{id}/messages`ga xabar yuborib, modelni yozish tool'ini
+chaqirishga undasa, natijadagi R3 action HAQIQATDA `AWAITING_APPROVAL`gacha
+yetib borardi — 2.2'ning "eng yuqori risk darajasi R2" invariantini to'g'ridan-
+to'g'ri buzib. (`authorize_consume_approval`ning o'zi bu yo'l uchun ham to'g'ri
+ulangan edi — action baribir inson tasdig'ini talab qilardi, shuning uchun bu
+"nazoratsiz bajarilish"ga emas, balki R2-cap siyosatining buzilishiga olib
+kelardi.)
+
+Tuzatish: `ai_tools.propose_write_tool_action` va `conversation_service.
+stream_message`'ning ikkalasi ham endi `actor_kind`ni MAJBURIY (default'siz)
+kalit-so'z sifatida oladi — `api/conversations.py`ning chaqiruvi
+`ctx.actor_kind`ni uzatadi. `propose_action`ning o'zidagi `actor_kind: ActorKind
+= ActorKind.HUMAN` DEFAULTI ATAYLAB SAQLAB QOLINDI (uni butunlay majburiy
+qilish 19 ta boshqa, aloqasiz test chaqiruv nuqtasini o'zgartirishni talab
+qilardi — bu chaqiruvchilarning barchasi haqiqatda doim inson, va ularni
+majburlash sof marosim bo'lar edi) — lekin buning o'rniga HAQIQIY ikkita
+production chaqiruvchining (`api/actions.py`, `ai_tools.py`) ikkalasi ham endi
+ANIQ uzatadi, birontasi ham defaultga tayanmaydi.
+
+Audit-zanjiri uslubida isbotlandi: yangi
+`test_a_service_actor_chatting_still_gets_its_r2_risk_cap_enforced`
+(`test_conversations_api.py`) — haqiqiy Service Actor sessiyasini (machine
+User + CustomerMembership + WorkspaceMembership + `actor_kind=SERVICE`
+Session, hammasi to'g'ridan-to'g'ri qurilgan) workspace'ga oddiy a'zo
+sifatida qo'shib, chat orqali `telegram_send_message`ni chaqirtirib
+ko'rsatildi. Tuzatishni vaqtincha `ActorKind.HUMAN`ga qattiq bog'lab, test
+aynan kutilgan tarzda (`assert 200 == 403` — action haqiqatda
+`AWAITING_APPROVAL`gacha yetib borib) muvaffaqiyatsiz bo'lishini ko'rsatdim,
+keyin qaytarib yashil ekanini tasdiqladim.
+
+Bu topilma shu sessiyaning o'zi allaqachon bir necha marta ta'kidlagan
+darsning yana bir nusxasi: **yangi authz invariant qo'shilganda, uni FAQAT
+"asosiy"/birinchi topilgan chaqiruv yo'liga ulash yetarli emas — har doim
+`grep` orqali BARCHA chaqiruvchilarni tekshirish shart.** Bu safar buni
+mustaqil, alohida subagent (bu commit'ning o'zi ustida ishlagan) topdi —
+xuddi shu FR-AUTH-009 qurilishining o'zi yozganidan KEYIN, alohida ko'rib
+chiqishda.
+
+558 test (557+1), barchasi real Postgres'da. `ruff`/`mypy` toza.
+
+**NFR-DATA-001b/c (13.4-bo'lim: "Har bir tashqi AI so'rovi uchun
+yuborilgan ma'lumot sinfi telemetriyada yoziladi" + "C4 ma'lumot tashqi
+providerga default yuborilmaydi") qurildi — OD-003'ning xavfsizlik-faqat
+skanerini TRD 13.2'ning to'liq C1-C5 klassifikatsiyasiga kengaytirib.**
+Bu ikkita ID traceability auditlarida bir necha marta "hosting/OD-005'ga
+bog'liq" deb noto'g'ri umumlashtirilgan edi — TRD 13.4'ni qayta o'qishda
+aniqlandi: faqat NFR-DATA-001a ("asosiy DB/storage tasdiqlangan mintaqada")
+va NFR-DATA-001d ("backup ham bir xil mintaqa talabiga bo'ysunadi")
+haqiqatan OD-005/hosting qaroriga bog'liq — 001b/001c esa sof, deterministik
+engineering ishi, OD-003'ning "server-side credential/session token allaqachon
+strukturaviy jihatdan yetib bo'lmas" xulosasidan farqli, chunki bu safar
+haqiqiy YANGI qamrov (moliyaviy/tibbiy/huquqiy matn) kerak edi.
+
+Buni yozishning o'zi ikkinchi, mustaqil topilmani ochib berdi: `AIUsageEvent`
+domain modelining o'z docstring'i ("the *audit* trail for the same call is a
+separate `ai.gateway_call.v1` AuditEvent, written only once reconciled")
+hech qachon kod bilan tasdiqlanmagan edi — `grep` bilan tekshirilganda bu
+audit event turi butun kod bazasida FAQAT shu bitta docstring'da, hech qanday
+`record_audit_event(...)` chaqiruvida yozilmasdi. Bu RISK-006 sinfining
+(hujjatlashtirilgan, lekin hech qachon amalga oshirilmagan nazorat) yana bir
+nusxasi — auditor bo'shlig'i, append-only trigger tasdiqlovi, `is_new_device_
+login`ning "known limitation" docstring'i bilan bir xil naqsh.
+
+`doda/ai/data_classification.py` — `outbound_guard.py`ning aynan bir xil
+falsafasi ("deliberately narrow, high-precision pattern scan — not a general
+DLP/PII classifier"): `DataClassification` (C2_INTERNAL/C3_PERSONAL/
+C4_SENSITIVE — C1 hech qachon avtomatik qaytarilmaydi, "bu ochiq bo'lishi
+mo'ljallangan" deb bilish imkoni yo'q; C5 bu funksiyaga umuman yetib
+bormaydi, chunki `outbound_guard.detect_likely_secret` uni ALLAQACHON
+bloklagan bo'ladi). `classify_outbound_content(content)`:
+- **C4** (TRD 13.2'ning o'z misollari — moliya/sog'liq/huquqiy): karta
+  raqami (Luhn checksum bilan tasdiqlangan, oddiy 13-19 xonali ketma-ketlik
+  emas — soxta-musbatni oldini olish uchun), IBAN shakli, tor, qo'lda
+  ko'rib chiqilgan kalit so'zlar ro'yxati (diagnoz/retsept/sud ishi va
+  ularning ru/en tarjimalari). Ataylab "shifoxona"/"hospital" kabi umumiy
+  so'zlar KIRITILMAGAN — joy nomini tilga olish shaxsning o'z sog'liq
+  ma'lumotini oshkor qilish bilan bir xil emas.
+- **C3** (shaxsiy/kontakt): email, telefon raqami shakllari.
+- **Standart C2** (ichki) — hech narsa mos kelmasa, hech qachon C1 emas
+  (xavfsiz standart — under-classification emas, over-classification
+  tomonga og'ish).
+
+`conversation_service.stream_message`ga ikkita joyda ulandi: (1)
+`outbound_guard`ning secret-tekshiruvidan DARHOL keyin, xabar hali
+saqlanmasdan turib — C4 aniqlansa yangi `SensitiveContentBlockedError`
+(422 `SENSITIVE_CONTENT_BLOCKED`) ko'taradi, xuddi `OutboundContentBlockedError`
+bilan bir xil "block outright, never silently strip" falsafasi; (2)
+`_reconcile_and_record`ning umumiy tail funksiyasida — endi RECONCILED
+HAM, REFUNDED HAM holatida `ai.gateway_call.v1` audit event yozadi
+(provider/model/mode/data_classification `safe_metadata`da) — ikkalasi
+ham "shu tur uchun tashqi so'rov kamida bir marta urinilgan" degani,
+`BudgetExceededError`/`DeepRequestCostCeilingExceededError`/
+`ProviderDisabledError` esa `_reconcile_and_record`ga umuman yetib
+bormaydi (to'g'ri — bu holatlarda provayderga hech qanday so'rov
+yuborilmagan).
+
+Audit-zanjiri uslubida ikkalasi ham isbotlandi: (1) C4-bloklash — mavjud
+`OutboundContentBlockedError` testining aynan bir xil "hech qachon
+provayderga yetib bormasin" naqshi (`_never_called` stub, `AssertionError`
+provayder chaqirilsa) bilan tekshirildi; (2) audit yozuvi — yangi
+`record_audit_event(...)` chaqiruvini vaqtincha `pass`ga almashtirib,
+ikkala yangi integratsiya testi (`test_a_normal_turns_data_classification_
+is_recorded_on_its_own_audit_event`, `test_a_turns_c3_personal_data_is_
+recorded_not_silently_downgraded_to_c2`) aynan kutilgan tarzda (audit
+ro'yxati bo'sh qaytib) muvaffaqiyatsiz bo'lishi ko'rsatildi, keyin qaytarib
+`git diff`ning FAQAT qo'shimcha (o'chirilgan qator yo'q) ekanini tasdiqlab
+yashil ekani ko'rsatildi.
+
+`tests/unit/test_data_classification.py` (10 test) — Luhn-valid test karta
+raqami (`4111111111111111`, haqiqiy Visa test raqami) C4 deb belgilanishi,
+bir xil uzunlikdagi Luhn-invalid ketma-ketlik esa C2'da qolishi (soxta-musbat
+himoyasi), C4+C3 aralash matn ustuvorroq C4'ga tushishi, "shifoxona" kabi
+umumiy so'z C4 tetiklamasligi — barchasi tekshirildi.
+
+`ALLOWED_SAFE_METADATA_KEYS`ga (`test_audit_redaction.py`) `mode`/
+`data_classification` qo'shildi. `AIUsageEvent`ning o'z docstring'i endi
+haqiqiy amalga oshirishga mos yangilandi.
+
+Frontend'ga hech narsa qo'shilmadi — bu telemetriya, mavjud audit
+ko'rish/trace_id filtri (workspace/customer sahifalarida allaqachon bor)
+orqali ko'rinadi, yangi UI elementi shart emas.
+
+`docs/open-decisions.md`ning OD-003 qatoriga va `docs/risk-register.md`ning
+RISK-004 qatoriga qo'shimcha yozildi — bu kengaytirish, yangi qaror emas
+(OD-003'ning "kelajakda yangi sezgir ma'lumot sinfi paydo bo'lsa qayta
+ochilishi kerak" bandi endi qisman qo'llanildi: yangi domain emas, lekin
+TRD'ning o'zi allaqachon yozgan C3/C4 sinflarining haqiqiy amalga
+oshirilishi).
+
+571 test, barchasi real Postgres'da. `ruff`/`mypy` toza.
+
+**Oltinchi `/simplify` ko'rib chiqish o'tkazildi — beshinchi pass'dan
+(`757f0c7`) keyingi 6 commit'ga qarshi (FR-ACT-001 tuzatishi, FR-AUTH-009
++ uning o'z chat-yo'li bypass tuzatishi, NFR-DATA-001b/c).** Jarayon bir
+xil: reuse/simplification/efficiency/altitude — 4 ta parallel subagent,
+bu safar to'rttasi ham to'liq ishladi (oldingi pass'da ikkitasi rate-limit
+bilan tugagan edi).
+
+**Topildi va tuzatildi (uch agent bir xil ikkita nuqtani mustaqil topdi —
+yuqori ishonchlilik belgisi):**
+1. **`conversation_service.py`ning yangi `unregistered_calls` bucket'i
+   `write_calls`/`read_calls`ni ALLAQACHON hisoblab bo'lgan
+   `is_write_tool`/`is_read_tool`ni UCHINCHI marta qayta tekshirardi** —
+   uchta mustaqil list comprehension, har biri butun `tool_calls_this_
+   round`ni aylanib chiqib. Bitta siklga (`for c in tool_calls_this_
+   round: if/elif/else`) birlashtirildi — har chaqiruv uchun ko'pi bilan
+   ikkita predikat tekshiruvi, uchta emas.
+2. **Read-tool va unregistered-tool xato yo'llarining ikkalasi ham bir
+   xil "TOOL-role Message qur, session.add, history.append" uch qatorli
+   naqshni mustaqil takrorlagan edi** (FR-ACT-001'ning yangi bucket'i
+   eskisining o'zini nusxalagan) — `_append_tool_result(call, text)`
+   yopiq funksiyasiga chiqarildi (session/conversation/history'ni
+   yopib oladi — bular butun `stream_message` davomida o'zgarmas),
+   ikkalasi ham endi shuni chaqiradi.
+3. **`api/service_actors.py`ning `create_service_actor`si `_to_out`
+   yordamchisi (aynan shu faylda, ikki funksiya yuqorida) mavjud bo'lsa-da,
+   to'rtta maydonni (`id`/`name`/`created_at`/`revoked_at`) qo'lda qayta
+   ro'yxatlagan edi** — `ServiceActorCredentialCreatedOut(**_to_out(
+   record).model_dump(), secret=secret)`ga o'zgartirildi, ikkinchi
+   nusxa yo'qoldi.
+4. **`service_actor_service.py`ning mashina `User`i uchun tasodifiy
+   placeholder qiymati uchta operatsiya orqali olinardi** (`uuid.uuid4()`
+   → f-string → `sha256(...).hexdigest()`) — holbuki xohlangan narsa
+   shunchaki tasodifiy, noyob 64-belgili hex satr, aynan shu faylning
+   o'zi haqiqiy credential secret uchun ishlatadigan `secrets.
+   token_hex(32)` bilan bitta chaqiruvda olinadi. Bu yerda haqiqiy
+   "subject" yo'q (haqiqiy OIDC subject'ni hash qiladigan `identity_
+   service.hash_oidc_subject`dan farqli), shuning uchun o'sha funksiyani
+   chaqirish ham noto'g'ri semantika bo'lardi — to'g'ridan-to'g'ri
+   `secrets.token_hex(32)`ga almashtirildi.
+5. **`api/errors.py`ning yangi `_sensitive_content_blocked` handler'i
+   mavjud `_outbound_content_blocked`ning aynan bir xil "warning logla →
+   422 + `_envelope` qaytar" shaklini bayt-baytiga takrorladi** — ikkinchi,
+   deyarli aynan bir xil nusxa paydo bo'lgani aynan shu naqshni
+   umumlashtirish kerak bo'lgan payt edi (birinchisi yolg'iz bo'lganda
+   umumlashtirish erta bo'lardi). Yangi `_blocked_content_response(
+   request, *, code, message, log_event, **log_fields)` yordamchisiga
+   chiqarildi — ikkala handler ham endi shuni chaqiradi. **Ataylab
+   birlashtirilmagan narsa**: ikkita DETEKTOR (`outbound_guard.detect_
+   likely_secret` — shartsiz bloklash; `data_classification.classify_
+   outbound_content`ning C4 filiali — o'z docstring'ida "kelajakda
+   workspace-darajasida sozlanadigan siyosat bo'lishi mumkin" deb
+   yozilgan) bitta abstraksiyaga majburlanmadi — faqat ularning HTTP
+   javob qurish "dumi" umumiy, ikkala tekshiruvning o'zi mustaqil,
+   turli kelajakka ega qolishi kerak.
+6. **`propose_action`ning o'z `actor_kind: ActorKind = ActorKind.HUMAN`
+   defaulti — aynan shu default'ning o'zi FR-AUTH-009'ning R2-cap
+   bypass'iga sabab bo'lgan edi — faqat IKKITA chaqiruv nuqtasida
+   (`ai_tools.propose_write_tool_action`, `stream_message`) tuzatilgan,
+   lekin ILDIZ funksiyaning o'zida qolgan edi.** Altitude agent aniq
+   ko'rsatdi: kelajakda `propose_action`ning uchinchi chaqiruvchisi
+   (masalan yangi ops-skript yoki connector-driven proposer) paydo
+   bo'lsa, u jimgina yana HUMAN'ni meros qilib olib, aynan shu xato
+   sinfini uchinchi marta ochib qo'yishi mumkin edi — buni hech qanday
+   test yoki mypy ushlamas edi. Buning aynan hamkasbi bo'lgan tuzatish
+   (`authz_service.authorize_consume_approval`) esa allaqachon `actor_
+   kind: ActorKind`ni HECH QANDAY defaultsiz, kalit-so'z-majburiy qilib
+   olgan edi — `propose_action` ham xuddi shu davolashga o'tkazildi
+   (default olib tashlandi). `mypy`ning o'zi 16 ta test chaqiruv nuqtasini
+   (`test_outbox_relay.py`, `test_approval_consume_concurrency.py`,
+   `test_action_lifecycle.py`, `test_telegram_relay.py`, `test_
+   notifications.py`, `test_notification_preferences.py`) "Missing named
+   argument" bilan aniq ko'rsatib berdi — barchasiga `actor_kind=
+   ActorKind.HUMAN` qo'shildi (ular haqiqatan doim inson bo'lgan
+   stsenariylar). `Session.create_session`ning o'z `actor_kind` defaulti
+   ATAYLAB TEGILMADI — u yerda faqat ikkita, strukturaviy jihatdan
+   qat'iy yaratish yo'li bor (OIDC login — doim inson; service-actor
+   endpoint — doim aniq SERVICE uzatadi), xavfsizlik qarori "qaysi
+   default tanlanishi"ga bog'liq emas, `propose_action`dan farqli.
+
+**Ataylab o'tkazib yuborildi**: `SensitiveContentBlockedError.
+classification`ning "har doim bitta qiymat" ekanligi (simplification
+agent'i ham "past qiymatli" deb baholadi — parametr sifatida qolishi
+xavfsiz, bitta chaqiruv nuqtasi bor).
+
+Tuzatishlardan keyin: 571 test (backend, real Postgres'da) o'zgarishsiz
+o'tdi; `ruff format`/`ruff check`/`mypy src/doda` toza. Sof refaktor —
+xatti-harakat o'zgarmadi.
+
+**To'liq TRD-ID qamrovi qayta tekshirildi (dasturiy sweep, xotiradan
+emas) — sakkizta ID hech qayerda (kod ham, CLAUDE.md ham) ID bo'yicha
+keltirilmagani topildi: FR-ADM-004 (aslida `docs/design-proposals/
+FR-ADM-design-proposal.md`da bor edi, faqat mening grep'im `docs/*.md`
+naqshi bilan pastki papkani ko'rmagan edi — yolg'on signal) va
+FR-KNW-003..009 (haqiqiy sitatsiya bo'shlig'i).** FR-KNW-001'ning o'z
+commit xabari "FR-KNW-002 dan boshlab... barchasi qurilmadi" deb
+JAMOAVIY zikr qilgan edi, lekin QOIDA 2 har bir ID'ning alohida
+bog'lanishini talab qiladi.
+
+Yangi `docs/design-proposals/FR-KNW-memory-design-notes.md` — FR-ADM
+design-proposal hujjatining aynan bir xil formatida (A/B/C toifalash,
+har ID alohida bo'lim) — TRD 3.5-bo'limini (FR-KNW-002..009) VA
+8-bo'limini (Xotira/Memory modeli — 5 tur, write gate, retrieval ACL,
+o'chirish SLA jadvali, FR-KNW-007/FR-CTL-004'ga bog'liq) to'liq o'qib
+chiqib yozildi. Asosiy xulosa: FR-KNW-002 (parsing→chunking→embedding→
+indexing) — bu zanjirning yagona haqiqiy bloker bo'g'ini (haqiqiy
+embedding chaqiruvi + DB sxema qarori kerak, ADR-008/009'ning "tarmoq
+siyosati AI provayderlarni bloklaydi" cheklovi bilan bir xil sabab) —
+qolgan oltitasi (003/004/005/006/008/009) hammasi shu bitta narsaning
+ustiga quriladi, mustaqil qurib bo'lmaydi.
+
+**Haqiqiy topilma**: TRD 8-bo'limining besh xotira turidan biri —
+**Preference** ("til, format, ism, uslub... foydalanuvchiga ko'rinadi va
+tahrirlanadi") — bu kod bazasida ALLAQACHON, boshqa ID'lar ostida
+mustaqil qurilgan ekan: `Conversation.pinned_language`/
+`WorkspaceLanguageSetting` (FR-CONV-001/FR-WKS-007),
+`UserAIPreference`/`WorkspaceAIPreference` (FR-ADM-006) — hammasi
+TRD'ning o'z qabul mezoniga (ko'rinadi, tahrirlanadi, endi audit
+qilinadi ham) mos. Bu FR-KNW-007/FR-CTL-004 qurilganda "memory" atamasi
+ishlatilmagan edi, lekin TRD 8-bo'limini keyinroq to'g'ridan-to'g'ri
+o'qib solishtirilganda aynan shu qatlamning bir qismi ekani ochildi —
+tasodifiy mos kelish emas, chunki ikkalasi ham bir xil talabni
+("foydalanuvchi o'z til/uslub afzalligini boshqara oladi") tasvirlaydi.
+Qolgan to'rt turi (Working/Episodic/Semantic/Sensitive) — Episodic/
+Semantic FR-KNW-002'ning o'ziga bog'liq, Sensitive esa yangi, alohida
+Product Owner qarorini (consent modeli, shifrlash, kim ko'ra oladi)
+talab qiladi.
+
+`docs/risk-register.md`ning RISK-003 qatoriga yangi hujjatga havola
+qo'shildi. Sof hujjatlashtirish — kod o'zgarmadi, 571 test o'zgarishsiz.
+
+**O'n oltinchi `security-review` o'tkazildi — 15-review'dan (FR-AUTH-009
+tuzatishi) KEYINGI, hali ko'rib chiqilmagan ikkita commit'ga qarshi:
+NFR-DATA-001b/c (C4/C3 data-classification skaneri + `ai.gateway_call.v1`
+audit yozuvi) va 6-simplify pass (`propose_action`ning `actor_kind`
+defaultini olib tashlash, tool-call classification/blocked-content
+handler dedup'lari).** Diapazon `git diff 3168716..6c2a5bf` orqali aniq
+belgilandi — bu ikkala commit `b2fa5c0` (FR-KNW citation-gap, sof hujjat)
+oldidan kod jihatidan oxirgi, hali review qilinmagan o'zgarishlar edi.
+
+Topish subagent'iga ayniqsa uchta nozik nuqtaga alohida e'tibor berish
+so'raldi: (1) C4-bloklash HAQIQATDA `stream_message`ning provayder
+chaqiruvidan VA xabarni saqlashdan OLDIN ishga tushishi (faqat
+hisoblab, e'tiborsiz qoldirilmasligi); (2) yangi `ai.gateway_call.v1`
+audit yozuvi haqiqiy `WorkspaceContext`dan (attacker-controllable emas)
+tenant-scoped ekani; (3) `propose_action`ning `actor_kind` defaultini
+olib tashlash HAQIQATDA barcha chaqiruvchilarni majburlashi, va test
+fayllaridagi yangi aniq `actor_kind=ActorKind.HUMAN` qo'shimchalari
+haqiqatan HAR BIRI inson stsenariysi ekani (ko'r-ko'rona mypy'ni
+qondirish uchun SERVICE stsenariysini yashirib qo'ymagani).
+
+**Natija: 0 topilma.** Subagent barcha uchta nuqtani, shu jumladan
+`service_actor_service.py`ning placeholder-hash o'zgarishini (haqiqiy
+autentifikatsiya siri emas, faqat OIDC subject bilan to'qnashmaslik
+uchun noyob kalit — `secrets.token_hex(32)`ga o'tish entropiyani
+kamaytirmaydi, faqat oshiradi) va `_to_out`/`_blocked_content_response`
+dedup'larining hech qanday yangi ma'lumot sizib chiqarmasligini
+alohida tasdiqladi. Bu 4-, 6-, 7-, 9-, 10-, 11-, 13-, 14-review'lar
+bilan bir xil — chindan ham toza natija.
+
+571 test, barchasi real Postgres'da (kod o'zgarmadi — sof tekshiruv).
+
+**FR-ACT-005'ning ataylab ochiq qoldirilgan yarmi — "to'liq circuit
+breaker... domain'ning FAILED -> RETRYING -> READY zanjiridan haqiqiy
+foydalanish" — endi qurildi.** `telegram_relay.py`ning o'z docstring'i
+bir necha marta aniq yozgan edi: mavjud `_send_with_retries` faqat
+BITTA yetkazish urinishi ICHIDA, jarayon-ichi (in-process) chegaralangan
+retry qiladi; shu budjet (`TELEGRAM_SEND_ATTEMPTS=3`) tugagach, action
+darhol terminal, xabar beriladigan FAILED'ga o'tardi — sikllararo
+(cross-cycle) qat'iy qaytarish yo'q edi. Bu ID PO qarorini talab
+qilmaydi (Telegram/OD-002 kabi) — sof, avvaldan aniq belgilangan
+muhandislik ishi, shuning uchun QOIDA 2'ni buzmasdan amalga oshirildi.
+
+0028-migratsiya `action_actions`ga ikkita ustun qo'shdi: `retry_count`
+(NOT NULL, standart 0 — mavjud qatorlar uchun `server_default="0"`) va
+`next_retry_at` (nullable — faqat RETRYING paytida to'ldiriladi).
+Bu ikkalasi `telegram_relay`ning O'Z `TELEGRAM_SEND_ATTEMPTS`idan
+BUTUNLAY mustaqil — ikkinchisi bitta chaqiruv ichida, birinchisi
+sikllar orasida ishlaydi.
+
+`action_service.py`ga ikkita yangi funksiya qo'shildi:
+- `record_transient_failure(session, action, *, actor_id) -> bool` —
+  `action.retry_count < MAX_ACTION_RETRIES` (=3) bo'lsa, action'ni
+  FAILED(**notify=False**)->RETRYING orqali o'tkazadi (retry_count
+  oshirilib, eksponensial backoff bilan `next_retry_at` o'rnatiladi) va
+  `True` qaytaradi; budjet tugagan bo'lsa, `apply_transition`ning
+  o'zining ODDIY terminal yo'liga (notify=True) tushib, `False`
+  qaytaradi — bu funksiya qurilishidan OLDINGI xulqning aynan o'zi.
+- `promote_due_retries(session, *, now=None) -> list[Action]` —
+  `fire_due_reminders`ning aynan bir xil "tenant-scoped transaction
+  ichida due qatorlarni topib, holatni o'zgartirish" naqshi: RETRYING
+  va `next_retry_at <= now` bo'lgan action'larni READY'ga qaytaradi va
+  ularning `action.ready.v1` outbox xabarini QAYTA navbatga qo'yadi —
+  aynan shu tool'ni oldin qabul qilgan connector hech qanday maxsus
+  "bu qayta urinish" holatini bilishi shart emas.
+
+`apply_transition`ga yangi `notify: bool = True` parametri qo'shildi
+(standart qiymat barcha mavjud chaqiruv nuqtalarini o'zgarishsiz
+qoldiradi) — FAILED_ACTION bildirishnomasi faqat `notify=True`da
+chiqadi. Bu ataylab: agar oraliq FAILED->RETRYING sakrashi ham
+bildirishnoma yuborsa, sustained outage HAR safar sikl davomida spam
+bildirishnoma yaratardi — bu muammo aynan shu sababdan avvalroq
+to'liq circuit breaker qurilishini to'xtatib turgan edi.
+
+`telegram_relay.py`ning `process_entry`i endi ikkita alohida `except`
+blokiga ega: `TelegramTransientError` (haqiqiy o'tkinchi xato — faqat
+shu holat yangi `_fail_with_retry` orqali persistent retry budjetiga
+yuboriladi) va bazaviy `TelegramSendError` (aniq rad etish — HTTP 400
+yoki ReadTimeout — hech qachon qayta urinilmaydi, to'g'ridan-to'g'ri
+terminal FAILED). Yangi `backend/scripts/promote_due_action_retries_job.py`
+— `fire_due_reminders_job.py` bilan bir xil mustaqil skript shakli
+(`UserCustomerIndex` orqali customer'larni topib, har birida
+`promote_due_retries`ni chaqiradi).
+
+**Ishlab chiqish jarayonida haqiqiy, UC-004'ning o'z "MAJBURIY testlar"
+jadvaliga to'g'ridan-to'g'ri zid bo'lgan xato o'zida topildi va yozishdan
+OLDIN emas, mavjud testlarni qayta ishga tushirishda aniqlandi.**
+Birinchi qoralama `process_entry`da BITTA `except TelegramSendError`
+blokini `_fail_with_retry`ga yo'naltirgan edi — bu HAR QANDAY rad
+etishni (shu jumladan ReadTimeout va HTTP 400 kabi, "xat aslida
+yuborilgan bo'lishi mumkin" yoki "hech qachon muvaffaqiyatli
+bo'lmaydigan" holatlarni) persistent retry budjetiga yuborardi. Bu
+aynan UC-004'ning "provider timeout bergan lekin xat aslida yuborilgan"
+stsenariysini buzardi — ReadTimeout'ni qayta urinish HAQIQIY duplikat
+xabar xavfini keltirib chiqarardi, FR-ACT-005'ning o'zi oldini olishi
+kerak bo'lgan narsa. Mavjud ikkita test
+(`test_a_read_timeout_is_not_retried_even_once`,
+`test_telegram_api_failure_drives_action_to_failed`) buni darhol
+ushladi (ikkalasi ham RETRYING kutilmagan holda paydo bo'lib
+muvaffaqiyatsiz bo'ldi). Tuzatish: `TelegramTransientError`ni ALOHIDA,
+`TelegramSendError`dan OLDIN ushlab, faqat SHU turga persistent retry
+qo'llash — bazaviy `TelegramSendError` (ReadTimeout/400) hamon
+to'g'ridan-to'g'ri terminal FAILED'ga boradi, hech qachon qayta
+urinilmaydi.
+
+Uchta claim ham audit-zanjiri uslubida alohida-alohida isbotlandi
+(vaqtincha buzib, testning aynan kutilgan sababda qizarishini ko'rsatib,
+qaytarib): (1) `notify=False` chiqarib tashlanganda yangi
+`test_a_sustained_transient_outage_within_one_cycle_schedules_a_
+persistent_retry` FAILED_ACTION bildirishnomasi kutilmaganda paydo
+bo'lib muvaffaqiyatsiz bo'ldi; (2) retry-budjet tekshiruvi
+o'chirilganda ham shu test, ham yangi
+`test_persistent_retries_are_also_bounded_and_the_final_one_notifies`
+(to'rtta sikl orqali MAX_ACTION_RETRIES'ni to'liq sarflab, faqat
+OXIRGI FAILED'da bitta FAILED_ACTION bildirishnomasi borligini
+tasdiqlaydi) darhol `retry_count == 0`ga qulab tushib muvaffaqiyatsiz
+bo'ldi; (3) ikkita except blokini birlashtirib, yuqoridagi ikkita
+mavjud test yana o'sha xatoni takrorladi. Uchalasi ham qaytarilgandan
+keyin (`git diff` bilan 0 qoldiq tasdiqlab) yashil.
+
+**Ataylab qolgan bo'shliq (o'zgarmagan)**: `telegram_relay.py`ning o'z
+top-level docstring'idagi "muvaffaqiyatli Telegram chaqiruvi bilan
+SUCCEEDED commit'i orasidagi qulash action'ni RUNNING holatida qotirib
+qo'yishi mumkin" gap'i bu ishga aloqasi yo'q, hamon ochiq —
+`find_stuck_running_actions.py` buni kuzatishda davom etadi. Bu ish
+faqat FAILED yo'lini (persistent retry) qamrab oldi, RUNNING'dagi
+crash-gap'ni emas.
+
+572 test (571+1: `test_a_sustained_transient_outage_within_one_cycle_
+schedules_a_persistent_retry` mavjud testni qayta yozib o'rniga o'tdi,
+`test_persistent_retries_are_also_bounded_and_the_final_one_notifies`
+yangi), barchasi real Postgres+Redis'da; `ruff`/`mypy src/doda` toza;
+migratsiya round-trip (0027→0028→0027→0028) qo'lda tekshirildi.
+
+**O'n yettinchi `security-review` o'tkazildi — FR-ACT-005'ning yangi
+persistent-retry diff'iga qarshi (0028-migratsiya, `action_service.py`ning
+`record_transient_failure`/`promote_due_retries`+`notify` parametri,
+`telegram_relay.py`ning except-band bo'linishi, yangi `promote_due_action_
+retries_job.py`).** To'rtta aniq nuqtaga alohida e'tibor berish so'raldi:
+(1) `promote_due_retries`ning tenant izolyatsiyasi — yagona chaqiruvchisi
+(`promote_due_action_retries_job.py`) `fire_due_reminders_job.py`/`verify_
+audit_chain_job.py` bilan bayt-baytiga bir xil shakl (RLS'siz `UserCustomer
+Index` orqali customer_id'larni topib, har biri uchun alohida `tenant_
+scoped_session`) ekani; (2) `notify=False`ning suiiste'mol qilinish
+imkoni — `retry_count`/`next_retry_at` hech qanday API schema yoki
+endpoint orqali ochilmagani, `notify=False`ning yagona chaqiruvchisi
+`record_transient_failure`ning o'z oraliq FAILED→RETRYING bosqichi
+ekani, yakuniy terminal FAILED har doim `notify=True` (standart) bilan
+chaqirilishi; (3) retry-byudjetini chetlab o'tish/race imkoni —
+`apply_transition`ning mavjud `SELECT...FOR UPDATE`+`populate_existing`
+qulfi FAILED→RETRYING ketma-ketligini atomik qilishi, va bir vaqtdagi
+`promote_due_retries` ishga tushirilishlarining ikkinchisi state-machine
+backstop orqali `InvalidActionTransition` bilan rad etilib, ikki marta
+outbox'ga qo'yishning oldi olinishi; (4) outbox qayta-navbatga qo'yish
+to'g'riligi — `customer_id` DB qatoridan (attacker-influenced emas)
+kelishi, `Action.idempotency_key`/`Approval.nonce` bilan aloqasi yo'qligi
+(bu mexanizm ikkalasidan ham mustaqil).
+
+**Natija: 0 topilma** — 4-, 6-, 7-, 9-, 10-, 11-, 13-, 14-, 16-review'lar
+bilan bir xil, chindan ham toza. Rasmiy hisobotga kiritilishi kerak
+bo'lgan, ishonch darajasi >=8 bo'lgan hech qanday nomzod yo'q edi.
+
+572 test, barchasi real Postgres+Redis'da (kod o'zgarmadi — sof
+tekshiruv).
+
+**Eslatma (jarayon, kod emas)**: oldingi commit (`d489ef5`, FR-ACT-005
+persistent retry) stop-hook majburlagani uchun 17-review yakunlanishini
+kutmasdan push qilingan edi va shu sababli kerakli attribution footer
+(`Co-Authored-By`/`Claude-Session`) qatorlarisiz ketdi — bu commit
+allaqachon push qilingan, `--amend`+force-push esa git safety protocol
+bo'yicha aniq so'ralmasdan qilinadigan destructive operatsiya, shuning
+uchun tuzatilmadi. Bu yozuvning o'zi (va undan keyingi barcha commit'lar)
+to'g'ri footer bilan davom etadi.
+
+**To'rtinchi to'liq TRD-ID sweep o'tkazildi (yana dasturiy, xotiradan
+emas — `pandoc` orqali barcha 124 ID chiqarib, CLAUDE.md+`docs/**/*.md`
+bo'ylab grep qilib) — bu safar `ASM-002/003/004` hech qayerda ID bo'yicha
+keltirilmagani topildi.** `ASM-001` CLAUDE.md'ning o'z kirish qismida
+("Jamoa" bo'limi) allaqachon muhokama qilingan edi, lekin `ASM-*`
+qatorining qolgan to'rttasi — TRD 8-bo'limining o'z "Taxminlar va tashqi
+bog'liqliklar" jadvali, har biri "agar noto'g'ri chiqsa — X oqibat" bilan
+— hech qachon ID bo'yicha tekshirilmagan edi.
+
+Yangi `docs/assumptions.md` — `open-decisions.md`/`risk-register.md`
+bilan bir xil formatdagi tracker, lekin Product Owner qaroriga emas,
+loyihaning o'z TAXMINLARIGA qaratilgan. Har bir ASM-* haqiqiy holatga
+solishtirildi:
+- **ASM-001** (4.5-5 FTE jamoa) — boshidanoq ataylab qayta talqin
+  qilingan (haqiqiy jamoa yo'q, bitta AI agent + PO).
+- **ASM-002** (tanlangan AI provider barqaror) — HOLDS, va bashorat
+  qilingan oqibat (fallback provider) ADR-009'da allaqachon, ehtiyot
+  chorasi sifatida oldindan qurilgan.
+- **ASM-003** (birinchi connector OAuth ishlatadi) — **taxminning o'zi
+  noto'g'ri chiqdi** (Telegram Bot API oddiy bot token ishlatadi, OAuth
+  emas), lekin bashorat qilingan oqibat ("S7 uzayadi") sodir bo'lmadi —
+  bot-token modeli OAuth'dan SODDAROQ chiqib, connector S7'gacha
+  kutmasdan qurildi. Bu haqiqiy, foydali topilma: TRD'ning o'z
+  taxmini xato bo'lgan holatlar ham "falsified, lekin zararsiz" bo'lishi
+  mumkin — har doim yomon oqibat bermaydi.
+- **ASM-004** (MVP bitta tashkilot uchun, SaaS emas) — OD-001'ning o'zi
+  buni ochiq ravishda bekor qiladi (Customer→Workspace→Membership
+  boshidanoq multi-tenant). Bashorat qilingan oqibatning ikkala qismi
+  (billing, self-serve onboarding) ataylab hali qurilmagan — bu yangi
+  bo'shliq emas, TRD 2.3'ning o'zi self-serve signup'ni v1 uchun OUT OF
+  SCOPE deb belgilagani va real pulli mijoz yo'qligining tabiiy natijasi.
+- **ASM-005** (hosting managed Postgres/storage taklif qiladi) — HOLDS
+  bugungi Render.com production sirti uchun, lekin OD-005'ning hali
+  talab qilinmagan VPS/Hetzner yo'nalishi (`docker-compose.prod.yml`)
+  self-managed Postgres'ga o'tishni nazarda tutadi — agar loyiha shu
+  yo'nalishga o'tsa, bashorat qilingan oqibat (SRE yuklamasi ikki
+  baravar) haqiqiy bo'lib qolishi mumkin, hozircha materiallashmagan
+  xavf sifatida qayd etildi.
+
+README.md'ga havola qo'shildi (`docs/`-daraxti va "Arxitektura qarorlari
+va ochiq savollar" bo'limi). Sof hujjatlashtirish — kod o'zgarmadi, 572
+test o'zgarishsiz (real Postgres+Redis'ga qarshi qayta tasdiqlandi,
+muhit qayta ishga tushirilgandan keyin); `ruff format`/`ruff check`/
+`mypy src/doda` va frontend `tsc --noEmit`/ESLint ham qayta tekshirilib
+toza ekani tasdiqlandi.
+
+**Eslatma (jarayon, kod emas)**: shu tekshiruv jarayonida GitHub Actions
+CI holati ham tekshirildi — HEAD (`57a8ca4`) uchun hech qanday CI ishga
+tushmagan, sababi aniq: workflow faqat push/PR hodisalari bilan
+ishga tushadi va bu branch uchun hech qanday ochiq PR yo'q (PR ataylab
+so'ralmasdan yaratilmaydi — mavjud qoida). Bu xato emas, faqat kuzatuv:
+har bir commit shu sessiyaning o'zida mahalliy ravishda CI'ning barcha
+tekshiruvlarini (lint/format/mypy/testlar) real Postgres+Redis'ga qarshi
+takrorlab tasdiqlaydi, shuning uchun amaliy qamrov saqlanadi, lekin GitHub
+UI'sida "yashil check" ko'rinmaydi — PR ochilganda birinchi push CI'ni
+avtomatik ishga tushiradi.
+
+**Ikkita haqiqiy xato topildi va tuzatildi — sof sog'liq tekshiruvi
+jarayonida, hech qanday yangi FR/ID qamrovi kerak bo'lmagan ikki alohida
+bug fix.**
+
+**Birinchisi — CI'ni haqiqatda buzadigan, hali hech kim payqamagan
+regressiya: `backend/scripts/seed_e2e_demo.py` endi ishlamas edi.**
+17-`/simplify` pass (`propose_action`'ning `actor_kind` parametridan
+defaultni olib tashlash, FR-AUTH-009 R2-cap bypass'ini yopgan tuzatish)
+BARCHA chaqiruvchilarni yangilagan edi — testlar, `ai_tools.py`,
+`api/actions.py` — LEKIN `scripts/`papkasi ikkala tekshiruv qamrovidan
+ham (pytest, CI'ning `mypy src/doda`) ATAYLAB tashqarida qoldirilgani
+uchun bu bitta chaqiruv nuqtasi ko'rinmay qolgan edi. Amaliy oqibat:
+har safar `.github/workflows/ci.yml`ning `e2e` job'i chaqirsa (yoki
+kimdir mahalliy E2E'ni qo'lda seed qilsa), skript darhol `TypeError:
+propose_action() missing 1 required keyword-only argument: 'actor_kind'`
+bilan qulardi — demak keyingi haqiqiy CI E2E ishga tushishi (birinchi
+ochiladigan PR bilan) butunlay muvaffaqiyatsiz bo'lardi, garchi 572 ta
+backend test va butun `ruff`/`mypy src/doda` toza bo'lsa ham.
+
+Tuzatish: `ActorKind` import qilinib, chaqiruvga `actor_kind=ActorKind.
+HUMAN` qo'shildi (demo seed'ning o'zi doim inson stsenariysi). Barcha 11
+CI-mos prefiks (`E2E_`, `E2E_CUSTOMER_`, `E2E_A11Y_`, `E2E_ARCHIVE_`,
+`E2E_KILLSWITCH_`, `E2E_LOGOUT_`, `E2E_AUDITOR_`, `E2E_AUTHCALLBACK_`,
+`E2E_CHAT_`, `E2E_KNOWLEDGE_`, `E2E_ATTACH_`) qayta seed qilinib,
+barchasi muvaffaqiyatli ishlashi tasdiqlandi. `mypy scripts/` (butun
+papka, 12 skript) ham alohida ishga tushirilib toza ekani ko'rsatildi —
+bu hozircha CI qamroviga kiritilmagan, faqat shu tekshiruv jarayonida
+"agar kiritilsa, hozir ham toza bo'lardi" deb tasdiqlash uchun.
+
+**Ikkinchisi — chat UI'sining o'zida, haqiqiy React race-condition
+xatosi: suhbatni almashtirish paytida eski (stale), hali yakunlanmagan
+javobning yangi suhbatni ustidan yozib yuborishi mumkin edi.**
+`handleSend`'ning `finally` blokidagi `refreshMessages()` chaqiruvi
+kutilmaydi (un-awaited) — foydalanuvchi shu vaqt oralig'ida "Yangi
+suhbat" bosib butunlay boshqa (yangi, bo'sh) suhbatga o'tsa, ESKI
+suhbat uchun kelayotgan GET javobi hali ham `setMessages(...)`ni
+chaqirardi, `selectedId` allaqachon YANGI suhbatga o'zgargan bo'lsa
+ham — natijada yangi, bo'sh suhbat birdan eski suhbatning xabarlari
+bilan "to'lib qolardi".
+
+Bu haqiqiy xato mavjud E2E testning o'zi (qidiruv testi, "Yangi
+suhbat" bosib ikkinchi suhbatga o'tishni sinaydi) tasodifan ushlab
+qoldi — `page.getByText(needle).not.toBeVisible()` kutilmaganda
+"visible" bilan muvaffaqiyatsiz bo'ldi. Tuzatish: `refreshMessages`ga
+monotonik o'suvchi `messagesRequestIdRef` qo'shildi — har bir chaqiruv
+o'zining so'rov ID'sini oladi, javob kelganda joriy ref qiymati bilan
+solishtiriladi, mos kelmasa (orada boshqa chaqiruv sodir bo'lgan bo'lsa)
+`setMessages`/`setError` chaqirilmaydi. Bu naqsh (`useSession.ts`ning
+"birinchi render'da server/client mos kelmasligi" muammosini alohida
+state qo'shmasdan sentinel qiymat bilan hal qilgani kabi) yangi state
+o'zgaruvchisi qo'shmasdan, faqat "eskirgan javobni bilib olish" uchun
+mo'ljallangan.
+
+**Tuzatishning isbotlanishi ikki bosqichda, jiddiy qiyinchilik bilan
+o'tdi — birinchi versiyasi noto'g'ri stsenariyni sinar edi.** Dastlabki
+test `page.route()` orqali ikkala GET'ni (eski VA yangi suhbat uchun)
+BIR XIL kechikish bilan ushlagan, keyin "javob ko'ringanidan keyin"
+`unroute()` chaqirgan edi — bu haqiqiy relative tartibni (eski GET
+birinchi boshlangani uchun birinchi ham tugaydi) tasodifan saqlab
+qolib, racening o'zini umuman sinamas edi. Haqiqiy tarmoq
+so'rovlarini (`page.on("request"/"response")`) vaqt tamg'asi bilan
+kuzatib chiqishda aniqlandi: `handleSend`'ning `finally`dagi GET'i
+javobning EKRANDA ko'rinishidan (streaming/pending holat orqali)
+ANCHA KEYIN, hatto foydalanuvchi "Yangi suhbat"ni bosgandan KEYIN ham
+sodir bo'lishi mumkin — demak `unroute()`ni "javob ko'rindi" nuqtasida
+chaqirish har doim juda erta bo'lib, asl GET hech qachon ushlanmasdan
+o'tib ketardi.
+
+Test to'g'ri dizaynga o'tkazildi: route'ning o'zi FAQAT birinchi
+ko'rgan GET so'rovini (bu doim yuborishning o'z eskirgan javobi, chunki
+u xabar yuborilgandan keyingi birinchi GET) kechiktiradi, undan keyingi
+har qanday GET (yangi suhbatning o'z, tabiiy so'rovi) darhol o'tadi —
+bu haqiqiy ilova xatti-harakatini (ikkinchi GET, xronologik jihatdan
+birinchisidan keyin, lekin tezroq tugaydi) to'g'ri aks ettiradi.
+Audit-zanjiri uslubida to'liq isbotlandi: tuzatish vaqtincha stash
+qilinib, YANGI, to'g'ri dizayndagi test aynan kutilgan sababda
+(eskirgan javob yangi suhbatni haqiqatda qayta yozib) muvaffaqiyatsiz
+bo'lishi ko'rsatildi, keyin tuzatish qaytarilib (production build
+qaytadan qurilib, server qayta ishga tushirilib) aynan shu test
+yashil ekani tasdiqlandi.
+
+572 test (backend, o'zgarishsiz — faqat `seed_e2e_demo.py` ops-skripti
+tuzatildi, pytest qamrovidan tashqarida), barchasi real Postgres'da;
+`ruff`/`mypy src/doda`/`mypy scripts/` toza. Frontend `tsc`/ESLint toza,
+production build muvaffaqiyatli; barcha 17 E2E spec (16 mavjud + yangi
+race-condition regressiya testi) real backend+frontend'ga (production
+build, barcha 10 mustaqil seed prefiksi bilan) qarshi yashil, jumladan
+accessibility skaneri (0 serious/critical WCAG buzilishi).
+
+**Coverage qayta o'lchandi — oxirgi o'lchovdan (485 test) beri qo'shilgan
+katta hajmdagi kod (FR-AUTH-007/009, FR-ACT-009, FR-KNW-001, FR-ADM-005/006,
+NFR-COST-001 breakdown, NFR-DATA-001b/c, FR-ACT-005 persistent retry)
+hech qachon coverage nuqtai nazaridan ko'rib chiqilmagan edi — va bu
+safar ham xuddi avvalgi coverage raundlari kabi haqiqiy, ilgari ko'rinmagan
+bo'shliqlarni ochib berdi.** To'rtta fayl 100%dan past edi, barchasi
+yangi qo'shilgan va hali hech qachon shu nuqtai nazardan tekshirilmagan:
+
+1. **`ai_budget_service.set_customer_ai_budget_override`ning concurrency-
+   recovery filiali (`begin_nested`/`IntegrityError`, 11 qator) hech qachon
+   majburlangan interleaving bilan sinalmagan edi** — bu aynan shu kod
+   bazasida besh marta takrorlangan TOCTOU naqshining (kill switch engage,
+   notification preference, va h.k.) oltinchi nusxasi, lekin FR-ADM-005
+   qurilgandan beri hech qachon "ikkita bir vaqtdagi birinchi-marta
+   override" stsenariysi bilan tekshirilmagan edi. Audit-zanjiri uslubida
+   isbotlandi: `begin_nested()`ni vaqtincha olib tashlab (xom insert+flush
+   bilan almashtirib), `test_two_concurrent_first_time_overrides_for_the_
+   same_customer_both_succeed` (`test_ai_budget_override_concurrency.py`,
+   `two_racing_sessions`/`commit_and_return` yordamchilaridan foydalanib)
+   aynan kutilgan tarzda — bu safar oddiy `IntegrityError` emas, balki
+   `InvalidRequestError: Can't operate on closed transaction` bilan,
+   chunki SAVEPOINT izolyatsiyasisiz xom IntegrityError butun sessiya
+   tranzaksiyasini zaharlab qo'yadi — muvaffaqiyatsiz bo'lishini
+   ko'rsatdim, keyin `begin_nested()`ni qaytarib (`git diff` bilan 0 farq
+   tasdiqlab) yashil ekanini ko'rsatdim.
+2. **`service_actor_service.revoke_service_actor_credential`ning ikkala
+   DENY/no-op filiali (`record is None` → 404, `already revoked` →
+   idempotent no-op) hech qachon test qilinmagan edi** — FR-AUTH-009
+   qurilgandan beri bu fayl birinchi marta coverage nuqtai nazaridan
+   ko'rib chiqildi. Uchta yangi HTTP test qo'shildi
+   (`test_service_actors_api.py`): noma'lum credential_id → 404; allaqachon
+   revoke qilingan credential'ni qayta revoke qilish → 204 (xato emas,
+   `session_service.revoke_session`ning o'zi bilan bir xil idempotent
+   pozitsiya); va boshqa customer'ning kredensialini revoke qilishga
+   urinish → 404 (per-record tenancy tekshiruvi, `test_cross_workspace_
+   record_access.py`ning o'zi o'rnatgan naqshning takrori — mos kelmagan
+   so'rov kredensialga umuman tegmasligi, u hamon haqiqiy ekanligi bilan
+   tasdiqlandi).
+3. **`api/knowledge.py`ning `download_document`idagi "DB qatori bor, lekin
+   storage obyekti yo'q" 404 filiali (`ObjectNotFoundError` → 404,
+   o'zining docstring'ida "crash o'rtasida yoki qo'lda storage buzilishi"
+   deb tasvirlangan holat) hech qachon sinalmagan edi.** Yangi
+   `test_downloading_a_document_whose_stored_object_went_missing_is_a_
+   clean_404` haqiqiy yuklangan fayldan keyin storage papkasidagi fayllarni
+   to'g'ridan-to'g'ri o'chirib (DB qatorini tegmasdan) bu stsenariyni
+   simulyatsiya qiladi — GET (metadata) hamon 200 qaytarishini, faqat
+   content-download 404 qaytarishini tasdiqlaydi.
+4. **`domain/knowledge/file_validation.py`da ikkita filial hech qachon
+   sinalmagan edi.** `FileContentMismatchError`ning o'z docstring'i "bu
+   almashtirilgan executable YOKI buzilgan/kesilgan yuklamani ushlaydi"
+   deydi — lekin mavjud testlarning barchasi faqat birinchi yarmini
+   (executable imzosi bilan) sinagan edi; "buzilgan/kesilgan yuklama"
+   (deklaratsiya qilingan magic-byte bilan mos kelmaydigan, lekin
+   executable ham bo'lmagan xom axlat) yarmi hech qachon tekshirilmagan
+   edi — `test_a_corrupted_or_truncated_upload_with_the_right_extension_
+   is_rejected` bilan yopildi. Ikkinchisi — `sanitize_filename`ning NUL-
+   bayt tekshiruvi (`"\x00" in filename`) — mavjud parametrlashtirilgan
+   testga yangi holat sifatida qo'shildi.
+
+`ai_budget_service.py`/`service_actor_service.py`/`api/knowledge.py`/
+`api/service_actors.py`/`domain/knowledge/file_validation.py`: barchasi
+100%ga yetdi. Qolgan 48 qator (49dan) barchasi allaqachon avvalgi
+sessiyalarda hujjatlashtirilgan, ataylab qoldirilgan sabablar bilan bir
+xil (uchta provider gateway adapteri — real tarmoq murojaatiga bog'liq;
+`authz_service.py`ning strukturaviy yetib bo'lmas DENY filiallari;
+`if __name__ == "__main__"` qatorlari; va h.k.) — yangi hech narsa yo'q.
+
+579 test, barchasi real Postgres(+Redis)'da; `ruff`/`mypy src/doda` toza;
+umumiy backend qamrov 99%.
+
+**Yettinchi `/simplify` ko'rib chiqish — oltinchi pass'dan (`6c2a5bf`) keyingi
+diff kichik bo'lgani (4 fayl, ~180 qator — FR-ACT-005 persistent retry va
+chat race-condition tuzatishi, ikkalasi ham allaqachon alohida-alohida
+tekshirilgan: birinchisi 17-security-review'da, ikkinchisi o'zining
+revert-test-restore isbotida) uchun to'liq 4-subagent jarayoni o'rniga
+qo'lda, to'g'ridan-to'g'ri o'qib chiqildi.** Bitta haqiqiy, kichik
+takrorlanish topildi va tuzatildi:
+
+`telegram_relay.py`ning `_resolve` va yangi `_fail_with_retry` funksiyalari
+bir xil uch qatorli "tenant-scoped sessiya ochish, Action'ni yuklash,
+`None` emasligini tasdiqlash" sozlamasini mustaqil takrorlagan edi — faqat
+yuklangan action bilan nima qilinishi farq qilardi (`apply_transition`
+yoki `record_transient_failure`). Yangi `_loaded_action(customer_id,
+action_id)` async context manager'iga chiqarildi, ikkalasi ham endi shuni
+chaqiradi. Kichik, ikki chaqiruv nuqtali topilma bo'lsa-da, bu kod bazasida
+har bir avvalgi `/simplify` pass'ning "reuse" toifasi bo'yicha qabul
+qilingan standartga mos (masalan `_get_workspace_action`, `_append_tool_
+result`, `_resolve_attachment` — barchasi xuddi shunday ikki-uch chaqiruv
+nuqtali takrorlanishni yopgan edi).
+
+579 test o'zgarishsiz (sof refaktor); `ruff`/`mypy src/doda` toza.
+
+**O'n sakkizinchi `security-review` o'tkazildi — 17-review'dan (`d489ef5`)
+keyingi hamma narsaga qarshi (ASM hujjat yozuvi, ikkita bug-fix commit —
+`seed_e2e_demo.py`'ning `actor_kind` regressiyasi va chat'ning stale-
+response race'i, coverage-gap yopilishi, 7-simplify pass).** Diapazon
+kichik (`git diff --stat`: 11 fayl, ko'pchiligi test/hujjat) va faqat
+UCHTA haqiqiy production-kod fayli o'zgargan — har biri allaqachon
+o'zining alohida audit-zanjiri uslubidagi isboti bilan tasdiqlangan edi,
+shuning uchun 13-/14-review'lardagi kabi to'liq 3-bosqichli subagent
+jarayoni o'rniga to'g'ridan-to'g'ri o'qib chiqildi:
+
+1. `backend/scripts/seed_e2e_demo.py` — ops-skript (API sirtiga ochiq
+   emas), yangi majburiy `actor_kind=ActorKind.HUMAN` kalit-so'zini
+   qo'shadi. Xavfsizlik ta'siri yo'q.
+2. `telegram_relay.py` — sof refaktor (`_loaded_action` context manager
+   chiqarilishi), ikkala chaqiruv nuqtasining xulqi bayt-baytiga
+   o'zgarmagan (`assert action is not None` semantikasi saqlangan).
+3. `frontend/.../chat/page.tsx` — mijoz tomonidagi stale-response
+   himoyasi (monotonik `messagesRequestIdRef`), faqat ko'rsatish
+   to'g'riligi — hech qanday authz yoki ma'lumot chegarasi o'zgarmadi
+   (ma'lumotning o'zi allaqachon autentifikatsiyalangan sessiya orqali
+   scope qilingan edi, faqat QAYSI javob oynada ko'rsatilishi tuzatildi).
+
+**Natija: 0 topilma** — 4-, 6-, 7-, 9-, 10-, 11-, 13-, 14-, 16-review'lar
+bilan bir xil.
+
+Shu bilan birga to'liq sog'liq tekshiruvi o'tkazildi: beshinchi marta
+to'liq TRD-ID sweep (barcha 124 ID CLAUDE.md+`docs/**/*.md`da — bu safar
+HAMMASI topildi, yangi sitatsiya bo'shlig'i yo'q — avvalgi to'rtta
+sweep'ning o'zi to'liq yopganini tasdiqlaydi), `.env`dagi mavjud
+credential'lar ro'yxati qayta tekshirildi (yangi hech narsa kelmagan —
+OD-004'ning GCP STT/TTS kaliti hamon kutilmoqda), va `docker ps`/`boto3`
+hamon avvalgidek bloklangan (S3 adapter uchun, FR-KNW-001'ning o'z
+cheklovi o'zgarishsiz). 579 test, `ruff format`/`ruff check`/`mypy
+src/doda` va frontend `tsc --noEmit`/ESLint — barchasi toza.
+
+**FR-CONV-007 (Xabarni tahrirlash va qayta generatsiya qilish, Should)
+qurildi — "41 ta hech qayerda tilga olinmagan" ro'yxatidagi FR-CONV
+oilasining uchtasidan (004/005/007) BIRINCHI marta to'g'ri qayta
+baholanib, haqiqatda qurilishi mumkinligi aniqlangani.** Avvalroq uchtasi
+ham "haqiqiy model javobi kerak" deb bitta guruhga noto'g'ri qo'yilgan
+edi — qayta ko'rib chiqishda aniqlandi: FR-CONV-007'ning o'z qabul
+mezoni ("yangi trace_id, eskisini o'chirmaydi") sof orkestratsiya —
+hech qanday haqiqiy model xulq-atvoriga bog'liq emas, `NullModelGateway`/
+soxta gateway bilan ham to'liq tekshiriladi. FR-CONV-004 (noaniqlikni
+model o'zi aniqlashi kerak) va FR-CONV-005 (5 turdan 2 tasi Knowledge/RAG
+talab qiladi) to'g'ri bloklangan holda qoladi — faqat 007 noto'g'ri
+guruhlangan edi.
+
+Dizayn qarori (QOIDA 2 doirasida, Product Owner qaroriga ehtiyoj
+sezilmadi — bu oddiy, deterministik muhandislik tanlovi): tahrirlash
+FAQAT suhbatning o'zining ENG SO'NGGI USER xabariga cheklandi. TRD'ning
+bir qatorli qabul mezoni "qaysi keyingi xabarlar qaysi versiyaga
+bog'lanib qoladi" degan branching-conversation-history savoliga javob
+bermaydi — "faqat eng so'nggi" bu savolni butunlay chetlab o'tadi (eng
+so'nggi user burilishidan keyin hech narsa yo'q, demak uni qayta
+generatsiya qilish aniq, chiziqli amal). Bu FR-TASK-005'ning "trigger"ni
+faqat vaqtga, FR-AUTH-007'ning faqat qurilmaga cheklashi bilan bir xil
+"TRD'ning bitta qatori hal qilmagan noaniqlikni ataylab tor qamrov bilan
+chetlab o'tish" naqshi.
+
+`conversation_service.stream_message`ga yangi, orqaga mos
+`exclude_message_ids: frozenset[uuid.UUID] = frozenset()` parametri
+qo'shildi (standart qiymat bo'sh to'plam — mavjud 19+ chaqiruv nuqtasining
+birortasi ham o'zgarishsiz qoladi) — tarix qurilishidan OLDIN
+`all_messages`ni filtrlaydi. Yangi `regenerate_message` funksiyasi uchta
+tekshiruv bilan (`MessageNotFoundForRegenerationError` → 404,
+`CannotRegenerateNonUserMessageError` → 422, `RegenerationTargetNotLatestError`
+→ 409) tasdiqlangandan keyin, tahrirlanayotgan ESKI xabar VA undan keyin
+yaratilgan HAR BIR qator (eski assistant/tool javobi) `exclude_message_ids`ga
+qo'yiladi — bu qatorlar bazadan O'CHIRILMAYDI, faqat YANGI burilishning
+model ko'radigan kontekstidan chiqarib tashlanadi. `POST .../messages/
+{message_id}/regenerate` — `api/conversations.py`ning ilgari inline
+bo'lgan SSE priming/framing/cancellation/xato mantig'i `_stream_turns_as_sse`
+umumiy yordamchisiga chiqarildi, ikkala endpoint (`post_conversation_message`,
+`regenerate_conversation_message`) ham shuni ishlatadi — bu dedup YANGI
+endpoint yozilishi bilan BIR VAQTDA qilindi, keyingi `/simplify` pass'ga
+qoldirilmadi (loyihaning "yozish paytida dublikatsiyani tuzat" intizomi).
+
+Ikkalasi ham audit-zanjiri uslubida isbotlandi: `exclude_message_ids`
+filtrini vaqtincha olib tashlab, yangi
+`test_regeneration_excludes_the_edited_away_turns_from_the_new_historys_context`
+(`_RecordingGateway` test double orqali, ikkinchi gateway chaqiruvining
+`history`sini to'g'ridan-to'g'ri tekshirib) aynan kutilgan tarzda —
+eski, tahrirlangan matn yangi burilishning tarixida ko'rinib —
+muvaffaqiyatsiz bo'lishini ko'rsatdim; `RegenerationTargetNotLatestError`
+tekshiruvini olib tashlab, `test_regenerating_a_non_latest_user_message_is_rejected`
+aynan kutilgan tarzda (409 o'rniga 200) muvaffaqiyatsiz bo'lishini
+ko'rsatdim. Ikkalasi ham qaytarilgandan keyin yashil. Yana uchta test:
+eng so'nggi xabarni tahrirlash yangi qatorlar yaratishi va ESKI
+qatorlarni saqlab qolishi, ASSISTANT xabarini "tahrirlashga" urinish
+422, noma'lum `message_id` 404. Bitta qo'shimcha test
+`test_cross_workspace_record_access.py`ga qo'shildi — `Message`ning
+`workspace_id` ustuni YO'Q bo'lgani uchun bu yerdagi tenancy himoyasi
+strukturaviy: `message_id` faqat allaqachon tasdiqlangan
+`conversation_id` ICHIDA qidiriladi, shuning uchun A'ning haqiqiy
+`conversation_id`sini B'ning `message_id`si bilan juftlab B'ning
+xabariga yetib bo'lmasligi tasdiqlandi.
+
+Frontend: suhbat sahifasidagi eng so'nggi USER xabar pufagiga
+"Tahrirlash" tugmasi qo'shildi — FAQAT `message.id === lastUserMessageId
+&& !sending` bo'lganda ko'rinadi (backend qaysi holatda qabul qilishini
+ANIQ aks ettiradi, Actions bo'limining "faqat bekor qilinadigan holatda
+tugma ko'rsatish" konventsiyasining o'zi). Bosilganda composer'ning o'zi
+eski matn bilan to'ldiriladi (yangi forma/modal emas — mavjud
+`handleSend`ning butun SSE-iste'mol siklini qayta ishlatish uchun);
+submit tugmasi "Qayta generatsiya qilish" deb o'zgaradi va
+`regenerateConversationMessage`ni chaqiradi. `frontend/src/lib/api.ts`da
+`streamConversationMessage`ning ilgari o'ziga xos bo'lgan fetch+SSE-parse
+mantig'i `streamTurnsFromUrl`ga chiqarildi, ikkalasi (`streamConversationMessage`,
+yangi `regenerateConversationMessage`) ham shu yordamchini chaqiradi —
+backend'dagi `_stream_turns_as_sse` dedup'ining frontend tarafidagi
+aynan o'zi.
+
+`e2e/chat.spec.ts`ning mavjud birinchi testiga yangi qadam qo'shildi
+(alohida spec/seed emas — bitta xabar yuborilgandan keyingi tabiiy
+davomi): "Tahrirlash" bosilib, composer eski matn bilan to'lishi,
+tahrirlab "Qayta generatsiya qilish" bosilgach yangi javob ko'rinishi VA
+eski almashinuv hamon ko'rinishi (`exact: true` bilan, tahrirlangan
+versiyadan ajratish uchun), keyin to'g'ridan-to'g'ri backend so'rovi
+bilan suhbatda aniq 2 ta USER xabar borligi tasdiqlandi. Real backend+
+production frontend'ga (production build) qarshi barcha 17 E2E spec
+(jumladan accessibility skaneri) yashil.
+
+585 test (579+6), barchasi real Postgres(+Redis)'da; `ruff`/`mypy
+src/doda` toza; frontend `tsc --noEmit`/ESLint toza, production build
+muvaffaqiyatli.
+
+**O'n to'qqizinchi `security-review` — FR-CONV-007'ning o'z diff'iga
+qarshi, to'liq uch bosqichli subagent jarayoni o'rniga to'g'ridan-to'g'ri
+ko'rib chiqildi (13-/14-review'lardagi aynan shu "kichik, allaqachon
+individual isbotlangan diff" precedenti bo'yicha).** `regenerate_message`
+yangi mutatsiya endpointi (`POST .../messages/{id}/regenerate`) ochgani
+uchun uchta aniq nuqtaga e'tibor qaratildi:
+
+1. **Tenant/workspace izolyatsiyasi** — `message_id` faqat
+   `_get_owned_conversation`dan (workspace_id allaqachon tasdiqlangan)
+   kelgan `all_messages = list_messages(conversation_id=...)` ICHIDA
+   qidiriladi. `Message`ning o'zida `workspace_id` ustuni yo'q — demak
+   himoya strukturaviy: boshqa workspace'ning `message_id`sini shu
+   endpoint'ga yuborish uni HECH QACHON `all_messages`da topa olmaydi
+   (`MessageNotFoundForRegenerationError` → 404), chunki ro'yxatning o'zi
+   allaqachon bitta, tasdiqlangan conversation bilan cheklangan. Yangi
+   `test_a_sibling_workspaces_message_cannot_be_targeted_for_regeneration`
+   (bir xil customer, boshqa workspace — RLS yordam bermaydigan aynan
+   shu holat) buni tasdiqladi.
+2. **Avtorizatsiya darajasi** — `authorize_use_chat(ctx.workspace)`
+   `post_conversation_message`bilan AYNAN bir xil (Member/WorkspaceAdmin/
+   CustomerOwner) — yangi, kengroq yoki torroq ruxsat darajasi
+   kiritilmadi. Boshqa a'zoning xabarini "tahrirlash" imkoniyati yangi
+   bo'shliq emas — `GET .../messages` allaqachon butun suhbatni har bir
+   workspace a'zosiga ochadi, bu ataylab shunday (actor-darajasidagi
+   cheklov yo'q, xuddi Task/Action ro'yxatlash kabi).
+3. **Xato konvertlari** — uchta yangi handler (`api/errors.py`) boshqa
+   har biri kabi bitta `_envelope` shakliga mos, `trace_id` bilan, xom
+   exception matnini oshkor qilmaydi.
+
+**Natija: 0 topilma** — 4-, 6-, 7-, 9-, 10-, 11-, 13-, 14-, 16-, 17-
+review'lar bilan bir xil.
+
+585 test o'zgarishsiz (kod o'zgarmadi — sof tekshiruv).
+
+**NFR-SCL-001ning "Ikki instansda test" o'z tekshiruv usuli endi API'ning
+O'ZIGA ham qo'llanildi — ilgari faqat ikkita WORKER (outbox_relay.py,
+telegram_relay.py) uchun qilingan edi.** Talabning o'zi ("Horizontal API
+va worker; stateless handler") ikkita teng yarimdan iborat, lekin faqat
+worker yarmi haqiqatda o'lchangan edi — API'ning o'zi (FastAPI/uvicorn
+jarayoni) chindan ham stateless ekanligini, ya'ni ikkita mustaqil nusxasi
+bir xil Postgres+Redis'ga qarshi ishga tushirilganda load balancer qaysi
+nusxaga yo'naltirishidan qat'i nazar bir xil xulq ko'rsatishini hech kim
+hech qachon tekshirmagan edi.
+
+`backend/scripts/two_instance_statelessness_check.py` — `load_test_api.py`/
+`verify_audit_chain_job.py` bilan bir xil turkumdagi mustaqil skript:
+ikkita HAQIQIY, mustaqil `uvicorn doda.main:app` jarayonini (turli
+portlarda, bir xil Postgres+Redis'ga ulangan — aynan haqiqiy horizontal
+deploy topologiyasi) talab qiladi va to'qqizta tekshiruvni o'tkazadi:
+(1) bitta bearer session ikkala instansga ham qabul qilinishi (sessiya
+hech qachon bitta jarayonning xotirasiga "yopishib qolmagani"ni
+isbotlaydi); (2) A'da yaratilgan task darhol B orqali ko'rinishi
+(jarayon-ichi read cache yo'qligini isbotlaydi); (3) B'da o'zgartirilgan
+task holati A'ning o'z tarix endpointi orqali darhol ko'rinishi (teskari
+yo'nalishdagi round-trip); (4) A orqali revoke qilingan sessiya B'ning
+ENG KEYINGI so'rovida darhol rad etilishi (revoke jarayon-darajasidagi
+tekshiruv emasligini, FR-AUTH-005'ning o'z SLA'si ikkinchi instans
+mavjud bo'lganda ham buzilmasligini isbotlaydi).
+
+Real ikkita mustaqil `uvicorn` jarayoniga (8001/8002 portlarida, bir xil
+Postgres+Redis'ga qarshi) qarshi ishga tushirib tasdiqlandi — barcha
+to'qqiz tekshiruv ham PASS berdi. Bu skript ham boshqa mustaqil
+skriptlar kabi pytest orqali emas, qo'lda tekshiriladi (o'rnatilgan
+konventsiya) — chunki haqiqiy ikkita OS jarayonini ishga tushirish talab
+qiladi, bu pytest'ning o'z test izolyatsiyasi doirasidan tashqarida.
+
+Kod o'zgarmadi (yangi mustaqil skript qo'shildi) — 585 test o'zgarishsiz,
+`ruff`/`mypy scripts/` toza.
+
+**Yana bitta "hujjatlashtirilgan, lekin hech qachon mashq qildirilmagan
+xavfsizlik/mustahkamlik xususiyati" topildi va yopildi — bu safar FR-AUTH-007
+login oqimining o'z best-effort try/except'i.** `api/auth.py`ning
+`google_login_callback`i yangi qurilma aniqlansa `notify_new_device_login`ni
+chaqiradi, va buni `try/except Exception` bilan o'rab oladi — izohning o'zi
+aniq aytadi: "login allaqachon commit bo'lgan, bu yerdagi har qanday xato
+tutilib loglansin, muvaffaqiyatli login'ni 500'ga aylantirmasin" (frontend'ning
+`logOut()` o'z revoke-so'rovi xatosini yutishi bilan bir xil "best-effort
+side action" pozitsiyasi). Coverage hisobotini qayta o'qishda aniqlandi: bu
+ANIQ ikki qator (`except` bloki) hech qachon bajarilmagan — chunki shu
+paytgacha yozilgan HAR BIR test uchun bildirishnoma yozish muvaffaqiyatli
+bo'lgan. Ya'ni bu himoya hech qachon sinalmagan — xuddi `is_new_device_login`
+docstring'idagi "known limitation" bilan bir xil sinf (8-security-review),
+faqat bu safar himoyaning o'zi, uning chegarasi emas.
+
+Yangi `test_a_failure_writing_the_new_device_notification_does_not_fail_the_
+login` (`test_auth_api.py`) `notify_new_device_login`ni monkeypatch qilib
+`RuntimeError` ko'taradigan qilib qo'yadi (ikkinchi, yangi qurilmadan login)
+va login'ning o'zi hamon muvaffaqiyatli bo'lib, qaytarilgan sessiya haqiqatda
+ishlatilishini (`GET /v1/me/workspaces` → 200) tasdiqlaydi. Audit-zanjiri
+uslubida isbotlandi: `try/except`ni vaqtincha olib tashlab, test aynan
+kutilgan tarzda (notify'ning o'z `RuntimeError`i butun so'rovni yiqitib, 500
+qaytarib) muvaffaqiyatsiz bo'lishini ko'rsatdim, keyin tuzatishni qaytarib
+(`git diff` bilan 0 farq tasdiqlab) yashil ekanini ko'rsatdim.
+
+Testni yozishda bitta amaliy xato ham o'zimda topildi va tuzatildi (push
+qilinmasdan oldin): birinchi qoralamada yangi test funksiyasini
+`test_a_new_device_login_creates_exactly_one_security_alert_per_customer`ning
+ICHIGA, uning o'z "uchinchi login, bir xil qurilma" blokidan OLDIN qo'ygan
+edim — `old_string` moslashtirishim faylning haqiqiy oxirigacha o'qimasdan,
+faqat qisman o'qilgan bo'lak ichidagi matnga mos kelgan edi, natijada ikkinchi
+funksiya avvalgi funksiyaning "dumi"ni o'zига ichiga olib qoldi
+(`NameError: customer_id`). `git checkout -- <fayl>` bilan faylni toza HEAD
+holatiga qaytarib, faylning HAQIQIY oxirini o'qib, keyin to'g'ri joyga
+qo'shib tuzatdim — bu FR-TASK-002'da allaqachon yozilgan "committed
+bo'lmagan ishni yo'qotish xavfi" darsi bilan bir xil ehtiyotkorlik, faqat bu
+safar hech qanday committed ish yo'qolmadi (xato yozishning o'zida ushlandi,
+push'dan oldin).
+
+`api/auth.py`: 96%→100%. 586 test, barchasi real Postgres'da; `ruff`/`mypy`
+toza.
+
+**NFR-SEC-003 (dependency audit) — real `pip-audit`/`npm audit` qayta
+ishga tushirilganda haqiqiy, CRITICAL darajadagi topilma chiqdi va
+tuzatildi: `next` 16.3.4 — Remote Code Execution (`next/og`
+`ImageResponse`, GHSA-vcvr-r3jv-pc5j, CVSS critical, ta'sir diapazoni
+16.2.0–16.3.5).** Bu rutin sog'liq tekshiruvi (har safar "hamma narsa
+toza" deb o'tkazib yubormaslik) jarayonida topildi, soxtalashtirilmagan.
+
+Frontend bu kod bazasida `next/og`ni hech qayerda ishlatmaydi
+(`grep -rn "next/og\|ImageResponse" src/` — 0 natija), lekin bu haqiqiy,
+patch qilingan versiya mavjud (16.3.8) bo'lgan CRITICAL CVE'ni e'tiborsiz
+qoldirish uchun sabab emas — "bugun ishlatilmayapti" hali "hech qachon
+yetib bo'lmaydi" degani emas, va NFR-SEC-003'ning o'zi bu toifadagi
+topilmani e'tiborsiz qoldirishni oqlamaydi. `pip-audit` ham bitta,
+past-xavfli topilma berdi (`urllib3` 2.7.0, uchta CVE — ikkitasi DoS,
+bittasi faqat HTTPS forwarding proxy ishlatilganda ta'sir qiladigan TLS
+konfiguratsiya xatosi, DODA hech qachon forwarding proxy ishlatmaydi) —
+lekin bu `pyproject.toml`da hech qanday pin orqali majburlanmagan
+(`google-genai`'ning transitive `requests`→`urllib3` zanjiri orqali
+kelgan, mening uzoq umr ko'rgan venv'imning eskirganligi, repo'ning o'zi
+emas) — `pip install --upgrade urllib3` bilan mahalliy tozalandi, lekin
+repo'da hech narsa o'zgarishi shart emas edi (freshCI install har doim
+yangi versiyani tortib oladi).
+
+`next`ning o'zi esa `package.json`da ANIQ versiyaga pin qilingan
+(`"next": "16.3.4"`, caret yo'q) — demak bu CI'ning keyingi `npm ci`
+chaqiruvida ham o'zi tuzalmaydi, repo'ning o'zida tuzatish shart edi.
+`npm install next@16.3.8` bilan yangilandi, `eslint-config-next` ham
+(Next.js'ning o'z konventsiyasi — ESLint konfiguratsiya paketi Next'ning
+o'zi bilan bir xil versiyada yurishi kerak) birga 16.3.8'ga ko'tarildi,
+ikkalasi ham `react`/`react-dom` bilan bir xil "aniq versiya, caret yo'q"
+uslubida pin qilindi (avvalgi `^16.3.8` qoralamasi ataylab aniq pin'ga
+almashtirildi — bu kod bazasida boshqa frontend bog'liqliklar ham shu
+intizomga rioya qiladi).
+
+`npm audit fix` qolgan yagona (past, DoS, dev-only `@typescript-eslint`
+transitive `brace-expansion`) topilmani ham muvaffaqiyatli, breaking-emas
+tuzatish bilan yopdi — `npm audit`: **0 ta topilma**.
+
+Haqiqiyligi to'liq, real backend+frontend bilan tasdiqlandi — faqat
+`npm run build`/`tsc`/`eslint` emas: backend (uvicorn) va frontend
+(`next start`, 16.3.8 bilan qurilgan production build) real ishga
+tushirilib, barcha 11 mustaqil E2E seed prefiksi bilan urug'lantirilib,
+**barcha 17 E2E spec** (shu jumladan accessibility skaneri) qayta ishga
+tushirilib yashil ekani tasdiqlandi — bu versiya ko'tarishning o'zi
+hech qanday runtime regressiya keltirmaganini isbotlaydi, shunchaki
+"build o'tdi" emas.
+
+Backend o'zgarmadi (586 test, o'zgarishsiz). `ruff`/`mypy`/ESLint/`tsc`
+barchasi toza.
+
+**Sog'liq tekshiruvi jarayonida muhit cheklovi o'zgargani aniqlandi — va
+bu tekshiruv haqiqiy, production'ni buzadigan topilmani ochib berdi:
+Render'da ishlatilayotgan Google OAuth client Google Cloud Console'da
+O'CHIRILGAN.** Rutin tarmoq-siyosati tekshiruvida (Telegram/OpenAI hamon
+403 bilan bloklangani tasdiqlangan holda) `oauth2.googleapis.com`,
+`generativelanguage.googleapis.com`, `api.anthropic.com`,
+`accounts.google.com`, `texttospeech.googleapis.com`/`speech.
+googleapis.com` endi haqiqiy serverlardan javob qaytarayotgani
+aniqlandi (404/302, proxy'ning 403 policy-denial'i emas — uch marta
+ketma-ket tasdiqlangan, bir martalik shovqin emas) — bu sessiyaning
+boshidan buyon "tarmoq siyosati bloklaydi" deb bir necha marta
+hujjatlashtirilgan Google/AI-provider cheklovining endi qisman
+o'zgarganini ko'rsatadi.
+
+Bu o'zgarishning o'zi FR-KNW-002+/haqiqiy Gemini-Claude-OpenAI chaqiruvini
+HALI OCHMAYDI — `.env`da hech qanday AI provider API kaliti
+(`DODA_OPENAI_API_KEY`/`DODA_GEMINI_API_KEY`/`DODA_CLAUDE_API_KEY`) yo'q,
+faqat tarmoq yo'li ochilgan, kredensial yo'q. Lekin **Google OAuth'ning
+o'zi** uchun `.env`da allaqachon haqiqiy `DODA_GOOGLE_OAUTH_CLIENT_ID`/
+`DODA_GOOGLE_OAUTH_CLIENT_SECRET` bor edi — shuning uchun endi
+`oauth2.googleapis.com/token`ga ANIQ shu kredensiallar bilan (haqiqiy
+bo'lmagan authorization code bilan, haqiqiy consent oqimisiz — foydalanuvchi
+brauzer sessiyasi talab qilinmaydi) bitta tekshiruv so'rovi yuborish
+mumkin bo'ldi, bu avvalroq imkonsiz edi.
+
+**Natija — kutilmagan, halos muhim**: Google bo'sh/noto'g'ri `code` uchun
+kutilgan `invalid_grant` o'rniga **`{"error": "deleted_client", "error_
+description": "The OAuth client was deleted."}`** qaytardi. Bu "muhit
+cheklovi" yoki "sintetik test" emas — bu Google'ning o'z serveridan
+kelgan, aniq, noaniqlik qoldirmaydigan OAuth xato kodi: `.env`da
+saqlangan (va Render deploy'ida ishlatilayotgan) Client ID Google Cloud
+Console'da ENDI MAVJUD EMAS. Amaliy oqibat: production'dagi (Render)
+"Google orqali kirish" tugmasi HOZIR haqiqiy foydalanuvchi uchun ham
+ishlamaydi — avvalgi `redirect_uri_mismatch`/`invalid_client` kabi
+tuzatish mumkin bo'lgan konfiguratsiya xatosidan farqli, bu holatda
+Google tarafida hech narsa qolmagan, faqat yangi client yaratish (yoki
+eskisini tiklash, agar Google Console buni taklif qilsa) orqaligina
+tuzatiladi.
+
+**Bu agent buni o'zi tuzata olmaydi** — Google Cloud Console'ga kirish
+huquqi yo'q (xuddi Telegram bot yaratish/Render hisobi yaratishga
+o'xshash chegara). Product Owner'ga aniq xabar berildi: Google Cloud
+Console → APIs & Credentials'da yangi OAuth 2.0 Client ID yaratish (yoki
+mavjudini qayta tiklash, agar hali mumkin bo'lsa) va natijada olingan
+Client ID/Secret'ni xavfsiz kanal orqali taqdim etish kerak — xuddi
+avvalgi uchta kredensial (Telegram token, birinchi Google client, ikkinchi
+Google client) kabi. Yangi redirect URI ro'yxati ham avvalgidek: Render
+domeni (`https://doda-backend-jv8e.onrender.com/v1/auth/google/callback`)
+va kelajakdagi VPS domeni (agar/qachon kerak bo'lsa) ikkalasi ham yangi
+client'ning "Authorized redirect URIs" ro'yxatiga qo'shilishi kerak —
+yangi client hech qanday eski ro'yxatni meros qilib olmaydi.
+
+Bu tekshiruv sintetik emas, real HTTP orqali, lekin HECH QANDAY
+sezgir ma'lumot (client_secret) chat matniga yoki logga chiqarilmadi —
+`.env`dan to'g'ridan-to'g'ri `curl`ga bitta so'rovda uzatildi, natija
+faqat Google'ning o'z xato kodi (sezgir emas). Kod o'zgarmadi — bu sof
+muhit/konfiguratsiya tekshiruvi (586 test, o'zgarishsiz).
+
+**Yangi, real va katta bo'shliq topildi va yopildi: oltita mustaqil
+"ops" skripti (`verify_audit_chain_job.py`, `find_stuck_running_
+actions.py`, `find_stuck_compensating_actions.py`, `fire_due_reminders_
+job.py`, `promote_due_action_retries_job.py`, `verify_trace_completeness_
+job.py`) — barchasi haqiqiy, testlangan kod — hech qachon, hech qanday
+deploy shaklida (na `docker-compose.prod.yml`, na Render) avtomatik
+ishga tushmagan.** Har birining o'z docstring'i aniq "cron/systemd
+timer ostida ishga tushirish uchun yozilgan" deydi, lekin bu loyihada
+hech qachon bunday wrapper haqiqatda qurilmagan edi — faqat qo'lda,
+tekshirish uchun ishga tushirilgan.
+
+Bu ikkitasidan ikkitasi FAQAT kuzatuv emas: `fire_due_reminders_job.py`
+FR-TASK-005'ning o'zi — tasdiqlangan, muddati kelgan reminder'ni
+haqiqiy `REMINDER_DUE` bildirishnomasiga aylantiradigan YAGONA kod
+yo'li; `promote_due_action_retries_job.py` esa FR-ACT-005'ning o'zi —
+RETRYING holatidagi action'ni backoff tugagandan keyin READY'ga
+qaytaradigan YAGONA kod yo'li. Demak ikkala funksiya ham to'liq
+qurilgan, to'liq testlangan, lekin HAQIQIY production'da (Render'da
+ham, hali qurilmagan VPS'da ham) HECH QACHON o'z-o'zidan ishga
+tushmas edi — bu "connector haqiqatda ulanmagan" yoki "outbox worker
+hech qachon continuous ishlamagan" (ADR-003, sessiya boshida topilgan)
+bilan bir xil "ko'rinishda bor, aslida hech narsa qilmaydi" naqshining
+yana bir, bu safar eng kattasi.
+
+Yechim yangi ko'rsatilgan VPS/Hetzner infratuzilmasi emas — Product
+Owner "hozircha VPS kerak emas" deganini hurmat qilib, Render'ning o'zi
+yoki kelajakdagi VPS'ning istalgan birida ishlaydigan, deploy shaklidan
+mustaqil mexanizm tanlandi: `.github/workflows/ops-jobs.yml`, yangi
+GitHub Actions scheduled workflow. Oltita alohida job (bittasi bitta
+skript — bitta skriptning muvaqqat xatosi boshqasini to'xtatib
+qo'ymasligi uchun), ikkita jadval bilan: har 15 daqiqada (ikkita
+FUNKSIONAL skript — FR-TASK-005/FR-ACT-005, ularning o'z docstring'i
+"qanchalik tez-tez — bu OD-005/hosting qarori, skriptning o'zi
+tanlamaydi" deganiga mos, aniq belgilangan, o'zgartirilishi mumkin
+standart sifatida) va kunlik (FR-AUD-004'ning o'z "Kunlik verification
+job" talabiga aynan mos, qolgan uchta kuzatuv skripti ham shu bilan
+birga).
+
+**Ataylab inert-by-design**: `DODA_PROD_DATABASE_URL` repository secret'i
+hali YO'Q (bu .env'dagi mahalliy/sandbox kalit emas — alohida, real
+production Postgres ulanish satri, masalan Render'ning `doda-postgres`
+External Database URL'i). Har bir job o'z ichida shu secret mavjudligini
+tekshiradi — bo'lmasa, aniq log xabari bilan jimgina hech narsa
+qilmaydi (xato emas, "skipped" ham emas — GitHub Actions'ning o'zida
+buning uchun alohida holat yo'q, shuning uchun step darajasida aniq
+yozib qo'yildi), xuddi Telegram/Google OAuth kodlarining kredensialsiz
+holatda jimgina kutishi kabi. Secret kelgandan keyin har bir skriptning
+o'z xato chiqishi (exit code != 0) shu job'ni GitHub'ning o'zida qizil
+qiladi, GitHub esa standart holatda repo kuzatuvchilariga email
+yuboradi — bu aynan skriptlarning o'z docstring'i aytgan "alert bu
+jarayonning o'z exit status'i, wrapper qolganini hal qilsin" talabi,
+yangi bildirishnoma kanali ixtiro qilinmadi.
+
+`deploy/README.md`ga yangi "Scheduled ops jobs" bo'limi qo'shildi —
+qanday yoqish (`DODA_PROD_DATABASE_URL` secret'ini qo'shish, Render'ning
+tashqi — ichki emas — connection string'ini ishlatish kerakligi aniq
+tushuntirilgan, chunki GitHub Actions runner Render'ning ichki
+tarmog'idan tashqarida) va halol chegara (bu workflow ham, boshqa
+Render-bog'liq hujjatlar kabi, haqiqiy Render Postgres'ga qarshi
+tasdiqlanmagan — tarmoq siyosati render.com'ni butunlay bloklaydi).
+
+Haqiqiylik ikki darajada tekshirildi: (1) YAML `python3 -c
+"import yaml; yaml.safe_load(...)"` bilan sintaktik jihatdan to'g'ri
+parslanishi, barcha oltita job va ikkita cron yozuvi to'g'ri
+ko'rinishi; (2) oltita skriptning HAR BIRI workflow'ning o'zi
+ishlatadigan aynan bir xil chaqiruv shakli bilan (`cd backend &&
+DODA_DATABASE_URL=... python scripts/<nom>.py`) shu sessiyaning real
+Postgres'iga — shu uzoq umr ko'rgan sandbox davomida to'plangan
+**19475 ta haqiqiy customer**'ga — qarshi qo'lda ishga tushirildi.
+
+**Natija "hammasi toza" degandan ancha qiziqroq va aynan shu
+workflow'ning o'zi nima uchun kerakligini to'g'ridan-to'g'ri isbotladi:**
+
+- `fire_due_reminders_job.py` (**exit 0**) — **18 ta HAQIQIY,
+  tasdiqlangan va muddati allaqachon o'tgan reminder'ni, 18 xil
+  customer bo'ylab, haqiqatda yoqib yubordi** (`REMINDER_DUE`
+  bildirishnomasi yaratib). Bular — oldingi sessiyalarda FR-TASK-005ni
+  qo'lda/E2E orqali tekshirishda yaratilgan, `confirm_reminder`
+  chaqirilgan, lekin hech qachon avtomatik yoqilmagan haqiqiy qatorlar
+  edi — aynan shu paragrafning yuqorisida tasvirlangan bo'shliqning
+  o'zi, nazariy emas, haqiqatda mavjud bo'lib chiqdi.
+- `promote_due_action_retries_job.py` (**exit 0**) — 0 ta promote
+  qilindi (hozircha RETRYING holatida, backoff'i o'tgan action yo'q).
+- `verify_audit_chain_job.py` (**exit 0**) — barcha 19475 customer'ning
+  audit zanjiri toza.
+- `verify_trace_completeness_job.py` (**exit 0**) — "19475 customers
+  checked, 0 mismatches."
+- `find_stuck_running_actions.py` (**exit 1**) — bitta, OLDINDAN
+  BILINGAN qator topdi: `find_stuck_running_actions.py`ning o'zini
+  yozishda (yuqoriga qarang) ataylab RUNNING holatida qoldirilgan
+  test-action, endi 21 kunlik (`running_since=2026-09-09`). Bu YANGI
+  xato emas — bu skriptning o'z asl verifikatsiya fixture'i, hech kim
+  tozalamagan, chunki tozalashning o'zi "find_stuck..."ning maqsadini
+  (haqiqiy qotib qolgan yozuvni topish) buzardi.
+- `find_stuck_compensating_actions.py` (**exit 1**) — xuddi shunday,
+  FR-ACT-009ning o'z verifikatsiya fixture'i (`compensating_since=
+  2026-09-18`, 12 kunlik).
+
+Oxirgi ikkitasining exit=1 bo'lishi **kutilgan va to'g'ri xulq** — bu
+ikki skriptning o'zi aynan shu ikki eski fixture'ni topish uchun
+mo'ljallangan, va workflow production'da ham xuddi shunday ishlaydi:
+har qanday haqiqiy qotib qolgan action paydo bo'lsa, kunlik job uni
+ENDI darhol (kuzatuvchiga yetib borguncha necha kun emas) ko'rsatadi.
+`fire_due_reminders_job.py`ning haqiqatda 18 ta eskirgan reminder'ni
+yoqib yuborgani esa — bu workflow qurilishidan oldin FR-TASK-005ning
+"yoqish" yarmi haqiqatda hech qachon avtomatik ishlamaganining
+to'g'ridan-to'g'ri, sintetik bo'lmagan dalili.
+
+**NFR-REL-001 ("Availability: MVP target 99.5%, graceful degradation" —
+tekshiruv: "Uptime monitoring, oylik hisobot") — ilgari NFR-REL-002 bilan
+birga "bloklangan" deb umumlashtirilgan edi, lekin bu ikkisi aslida farqli
+va NFR-REL-001'ning o'zi ops-jobs.yml bilan aynan bir xil usulda
+qurilishi mumkin ekani aniqlandi.** TRD'ning o'z jadvalini (pandoc orqali,
+xotiradan emas) qayta o'qib chiqishda farq aniq ko'rindi: NFR-REL-002
+("Oyiga 3.6 soat; sarflansa feature freeze — SRE dashboard") haqiqatda
+yangi, murakkab infratuzilma (byudjet hisoblash, avtomatik feature-freeze
+siyosati) talab qiladi va bloklangan bo'lib qoladi; NFR-REL-001ning o'z
+tekshiruvi esa — "Uptime monitoring, oylik hisobot" — aynan
+`verify_audit_chain_job.py`/`ops-jobs.yml` qurilishida ishlatilgan
+mantiqning o'zi: hech qanday yangi mahsulot qarori emas, faqat GitHub
+Actions'ning cheksiz tashqi tarmoq huquqidan (bu sandbox'ning o'zi
+render.com'ni butunlay bloklaydi) foydalanadigan ikkita scheduled
+workflow.
+
+`.github/workflows/uptime-check.yml` — har ~10 daqiqada production health
+endpoint'ini (`/v1/healthz`, autentifikatsiyasiz, DB'ga bog'liq emas)
+ping qiladi, Render'ning o'z hujjatlashtirilgan bepul-reja xulqini
+("~50s cold start") hisobga olib, birinchi urinishda emas, ~60 soniya
+davomida (6 marta, 10s oraliqda) qayta urinadi — bu `deploy/README.md`da
+allaqachon hujjatlashtirilgan, frontend'ning o'z post-login retry tuzatishi
+bilan bir xil tolerantlik. Faqat shu oyna tugagandan keyin ham javob
+kelmasa — bu HAQIQIY to'xtash, oddiy cold start emas — job qizil bo'ladi.
+
+`.github/workflows/uptime-monthly-report.yml` — oyiga bir marta (1-sanada)
+`gh run list` orqali (standart `GITHUB_TOKEN`, yangi secret shart emas)
+`uptime-check.yml`ning oxirgi 30 kunlik ishga tushirish tarixini o'qib,
+muvaffaqiyat foizini hisoblab, Job Summary'ga yozadi — bu NFR-REL-001'ning
+o'z "oylik hisobot" talabining halol, yangi infratuzilma qurmasdan
+bajarilishi: GitHub allaqachon saqlab turgan ma'lumotdan foydalaniladi,
+yangi baza yoki saqlash joyi ixtiro qilinmadi.
+
+**Ataylab inert-by-design, ops-jobs.yml bilan bir xil naqsh**:
+`DODA_PROD_HEALTH_URL` — bu safar **secret emas, repository VARIABLE**
+(health URL sezgir emas) — hali mavjud emas. Ataylab kodga qattiq
+yozilmagan: `render.yaml`ning o'z izohi Render'ning bu Blueprint'ning
+xizmatlariga allaqachon IKKI MARTA tasodifiy suffiks bilan nom berganini
+hujjatlashtiradi (yuqoriga qarang, "Birinchi Render Blueprint sinovi") —
+URL'ni kodga qattiq yozish xuddi shu sababdan kelajakda jimgina eskirib
+qolardi; variable Product Owner'ga kod o'zgarishisiz yangilash imkonini
+beradi.
+
+**Halol chegaralar, aniq yozilgan**: bu ~10 daqiqalik namuna, uzluksiz
+monitoring emas — ikki tekshiruv orasidagi qisqa to'xtash ko'rinmasligi
+mumkin. "Hisobot" — GitHub Actions Job Summary, alohida dashboard emas
+(bu NFR-REL-002'ning o'z, ancha qattiqroq talabi — byudjet+avtomatik
+feature-freeze — bu safar QURILMADI, bloklangan bo'lib qoladi). "Graceful
+degradation" (NFR-REL-001'ning sifat jihatidan o'lchab bo'lmaydigan
+qismi) uchun yangi kod yozilmadi — bu allaqachon mavjud, alohida
+qurilgan va hujjatlashtirilgan xususiyatlarning yig'indisi orqali
+ta'minlanadi: `NullModelGateway`ning aniq "AI provayder hali
+tanlanmagan" xabari (soxta javob o'rniga), AI byudjeti soft-cap
+ogohlantirishi, kill switch, va frontend'ning Render cold-start uchun
+qurilgan qayta urinish/kutish UI'si — bularning hech biri yangidan
+qurilmadi, faqat shu talab bilan bog'lab ko'rsatildi. Render'ga qarshi
+tasdiqlanmagan — boshqa har bir Render-bog'liq hujjat kabi, tarmoq
+siyosati bloklaydi.
+
+`docs/risk-register.md`da/traceability yozuvida NFR-REL-\* endi ikkiga
+ajratilgan holda ko'rinadi: NFR-REL-001 qurilgan, NFR-REL-002 hamon
+bloklangan — avvalgi "ikkalasi ham bloklangan" umumlashtirish endi
+noto'g'ri bo'lib qolgani uchun aniqlashtirildi.
+
+Kod o'zgarmadi (backend'ga hech narsa tegilmadi) — 586 test o'zgarishsiz.
+YAML ikkalasi ham `python3 -c "import yaml; yaml.safe_load(...)"` bilan
+sintaktik jihatdan tasdiqlandi; `jq`/foiz hisoblash mantig'i qo'lda,
+sintetik `gh run list` JSON namunasi bilan (4 ta yozuv, 3 muvaffaqiyatli)
+tasdiqlanib, `75.00%` to'g'ri chiqishi ko'rsatildi; `bash -n` ikkala
+skriptning sintaksisini tasdiqladi.
+
+**FR-KNW-001'ning o'z kod bazasida aniq hujjatlashtirilgan bo'shlig'i
+yopildi: DOCX/XLSX validatsiyasi faqat ZIP magic byte'ni tekshirardi,
+haqiqiy OOXML tarkibini emas.** `file_validation.py`ning o'z izohi
+("to'liq kontent-tur tekshiruvi... ataylab QURILMADI — bu haqiqiy,
+hujjatlashtirilgan bo'shliq") buni ochiq qoldirgan edi — natijada
+istalgan to'g'ri shakldagi ZIP arxivi (masalan, nomi o'zgartirilgan
+`.epub`, `.jar`, yoki hech qanday Office kontentisiz oddiy arxiv)
+`.docx`/`.xlsx` kengaytmasi bilan validatsiyadan muvaffaqiyatli o'tardi —
+FR-KNW-001'ning o'z "malware validatsiyasi" acceptance mezoniga
+(executable/noto'g'ri kontentni rad etish) to'liq mos kelmasdi.
+
+Tuzatish: har ikkala OOXML format uchun haqiqiy Word/Excel paketida
+HAR DOIM mavjud bo'lgan ichki a'zoni (`word/document.xml` DOCX uchun,
+`xl/workbook.xml` XLSX uchun) `zipfile.ZipFile`ning markaziy katalogidan
+tekshiradigan `_OOXML_REQUIRED_MEMBER` qo'shildi — bu ZIP magic byte
+tekshiruvidan KEYIN, lekin boshqa tekshiruvlar bilan bir xil
+`FileContentMismatchError` orqali. Buzilgan/kesilgan ZIP (`zipfile.
+BadZipFile`) ham ushlanib, xuddi shu xato turiga aylantiriladi — xom
+exception API orqali sizib chiqmaydi. **Ataylab torroq qolgan narsa**:
+bu hamon OOXML'ning o'z XML kontentini (masalan, makro/embedded-object
+xavflari) tahlil qilmaydi — faqat konteyner strukturasi (kerakli a'zo
+mavjudligi) tekshiriladi, komment sifatida aniq yozilgan.
+
+Audit-zanjiri uslubida isbotlandi: `_OOXML_REQUIRED_MEMBER` tekshiruvini
+vaqtincha `if False and ...`ga aylantirib, uchta yangi test
+(`test_a_generic_zip_archive_renamed_to_docx_is_rejected`,
+`test_an_xlsx_renamed_from_a_docx_is_rejected`,
+`test_a_corrupted_zip_with_a_docx_extension_is_rejected`) aynan kutilgan
+tarzda (`DID NOT RAISE FileContentMismatchError`) muvaffaqiyatsiz
+bo'lishini ko'rsatdim, keyin faylni zaxira nusxadan tiklab (`diff` bilan
+0 farq tasdiqlab) qaytadan yashil ekanini ko'rsatdim. Ikkita qo'shimcha
+"baxtli yo'l" testi (`test_a_well_formed_docx_is_accepted`,
+`test_a_well_formed_xlsx_is_accepted`, real, qo'lda qurilgan minimal
+OOXML zip baytlari bilan — DOCX/XLSX uchun bu loyihada birinchi marta)
+ham qo'shildi, chunki bu ikki format uchun hech qachon hatto baxtli yo'l
+ham test qilinmagan edi.
+
+HTTP darajasida yangi handler kerak bo'lmadi — `FileContentMismatchError`
+allaqachon `FileValidationError`ning subklassi, `api/errors.py`ning
+mavjud bitta-konvert handler'i orqali 422 qaytaradi (executable-rad etish
+yo'li bilan bir xil, allaqachon HTTP orqali testlangan). Yangi E2E test
+ham qurilmadi — bu sof ichki validatsiya kuchaytirilishi, HTTP xulqi
+(422, Document qatori yaratilmaydi) aynan bir xil qoladi.
+
+591 test (586+5), barchasi real Postgres'da; `ruff`/`mypy` toza.
+
+**Sakkizinchi `/simplify` ko'rib chiqish o'tkazildi — `407c888..HEAD`
+diapazoniga qarshi (11 commit: FR-CONV-007 edit/regenerate, NFR-SCL-001
+ikki-instansli statelessness tekshiruvi, auth best-effort testi, README
+sinxronizatsiyasi, Next.js RCE patch'i, Google OAuth client-deleted
+topilmasi, ops-jobs.yml rejalashtirish, uptime monitoring workflow'lari,
+FR-KNW-001ning OOXML konteyner validatsiyasi).** Jarayon bir xil: 4 ta
+parallel review agent (reuse/simplification/efficiency/altitude).
+Ikkita topilma ikkita agent tomonidan MUSTAQIL ravishda bir xil joyga
+ko'rsatildi (`ops-jobs.yml`ning dublikatsiyasi, `uptime-monthly-
+report.yml`ning ikki marta so'rov yuborishi) — yuqori ishonchlilik
+belgisi.
+
+**Topildi va tuzatildi (8 ta):**
+1. `RegenerateMessageRequest` (`api/conversation_schemas.py`)
+   `PostMessageRequest`ning aynan bir xil ikki maydonini (`content`,
+   `mode`) mustaqil takrorlagan edi — `PostMessageRequest`dan meros
+   qilib olishga o'zgartirildi (nom hamon alohida, chaqiruv nuqtasida
+   o'qilishi uchun).
+2. `test_conversations_api.py`ning `_regenerate_message` test
+   yordamchisi `_post_message`ning bayt-baytiga nusxasi edi — olib
+   tashlandi, barcha chaqiruv nuqtalari `_post_message`ga o'tkazildi.
+3. `test_auth_api.py`ning `_google_login` yordamchisi IKKI marta,
+   ikkita test funksiyasi ICHIDA mustaqil yozilgan edi (FR-AUTH-007
+   testlarining ikkalasida) — modul darajasiga ko'chirildi, ikkalasi
+   ham endi shuni chaqiradi.
+4. `test_conversations_api.py`da 5 ta FR-CONV-007 testi (4 emas —
+   `awk` bilan sanab tasdiqlandi) bir xil "suhbat yaratish + javobni
+   ajratib olish" bloklarini mustaqil takrorlagan edi — yangi
+   `_create_conversation(client, member)` yordamchisiga chiqarildi.
+5. `regenerate_message`'ning (`conversation_service.py`) uchta mustaqil
+   skaneri (`next()` target uchun, `max()` eng so'nggi USER xabarni
+   topish uchun, `frozenset` exclude ro'yxati uchun) bitta index-asosli
+   pass'ga birlashtirildi — `all_messages` `list_messages`ning o'zi
+   kafolatlagan tartibda (ascending by created_at) kelgani uchun "target
+   eng so'nggi USER xabarmi" savoli shunchaki "undan keyin boshqa USER
+   xabari yo'qmi"ga teng, alohida `max()` solishtirish shart emas.
+6. `frontend/.../chat/page.tsx`ning `lastUserMessageId`si har bir
+   render'da (streaming paytidagi HAR BIR SSE-chunk re-render'ida ham)
+   `.slice().reverse().find(...)` bilan butun massivni nusxalab
+   qayta aylanardi — `Array.prototype.findLast` (ES2023,
+   `tsconfig.json`ning `lib: [..., "esnext"]`i orqali mavjud) bilan
+   almashtirildi, nol-nusxa orqaga skanerlash.
+7. `uptime-monthly-report.yml` bir xil 30-kunlik `gh run list`
+   natijasini IKKI marta (jami va muvaffaqiyatli sonlarni alohida
+   hisoblash uchun) so'rardi — bitta so'rovga, keyin ikkala sonni ham
+   shu natijadan hisoblashga o'zgartirildi.
+8. `ops-jobs.yml`ning 6 ta deyarli bir xil job'i (har biri checkout/
+   setup-python/install/conditional-run/conditional-skip besh qadamini
+   qo'lda nusxalagan, 171 qator) bitta `strategy: matrix` job'ga
+   (`fail-fast: false` bilan — bu GitHub Actions'ning har bir matrix
+   yozuviga alohida, mustaqil check berish xususiyatini saqlab qoladi,
+   "bitta skriptning xatosi boshqasini to'xtatmasin, har biri o'z
+   qizil/yashil belgisiga ega bo'lsin" talabini buzmasdan) birlashtirildi.
+
+**Ataylab o'tkazib yuborildi**: `stream_message`ning o'z `all_messages =
+await list_messages(...)` chaqiruvi (`session.add(user_message)` +
+`session.flush()`dan KEYIN sodir bo'ladi) chaqiruvchining oldindan
+yuklab olgan ro'yxati bilan "ikki marta DB so'rovi" sifatida
+belgilangan edi — lekin bu fetch chindan ham flush'dan KEYIN, yangi
+qo'shilgan xabarni ko'rish uchun qayta so'ralishi SHART (SQLAlchemy'ning
+sessiya-ichi tranzaksiya ko'rinishi — o'z flush qilingan INSERT'ini
+ko'radi, lekin chaqiruvchining oldingi fetch'i buni hali ko'rmagan).
+Bu funksiyaning diqqat bilan mulohaza qilingan, hujjatlashtirilgan
+davrida haqiqiy murakkablik/to'g'rilik xavfi qo'shmasdan, chegaralangan
+(~200 qatorli xabar ro'yxati, burilishiga bitta marta) yutuq uchun
+tuzatish arzimaydi deb topildi.
+
+Tuzatishlardan keyin: 591 test (backend, real Postgres'da) o'zgarishsiz
+o'tdi (sof refaktor); `ruff format`/`ruff check`/`mypy src/doda` toza;
+frontend `tsc --noEmit`/ESLint/production build toza; ikkala workflow
+fayli YAML darajasida (`yaml.safe_load`) va qo'lda struktura
+tekshiruvi bilan (matrix yozuvlari, cron qiymatlari, bitta-fetch
+mantig'i) tasdiqlandi. Barcha 17 E2E spec real backend+production
+frontend'ga qarshi (sandbox'ning oldindan hujjatlashtirilgan Chromium
+yo'l-mos kelmasligi `PLAYWRIGHT_EXECUTABLE_PATH` bilan chetlab o'tilib)
+qayta ishga tushirilib yashil — jumladan `chat.spec.ts`ning FR-CONV-007
+testi, aynan tuzatilgan `findLast`/regenerate yo'lini ishlatadi.
+
+**Yigirmanchi `security-review` — bu safar to'liq uch bosqichli subagent
+jarayoni o'rniga to'g'ridan-to'g'ri ko'rib chiqildi (13-/14-/18-
+review'lardagi "kichik, allaqachon individual isbotlangan diff"
+precedenti bo'yicha):** har bir o'zgarish mexanik, xulq-saqlovchi
+refaktor ekani alohida-alohida tasdiqlandi — `regenerate_message`ning
+index-asosli qayta yozilishi mantiqiy jihatdan eski uch-skanerli
+versiyaga teng (qo'lda solishtirib tekshirildi), schema merosi bir xil
+maydon to'plamini saqlaydi, `findLast` bir xil semantikaga ega, test
+yordamchilarining ko'chirilishi chaqiruv nuqtalarini o'zgartirmadi,
+CI workflow qayta tuzilishi hech qanday sir/trigger/ruxsatga
+tegmadi. **Natija: 0 topilma** — 4-, 6-, 7-, 9-, 10-, 11-, 13-, 14-,
+16-, 17-, 19-review'lar bilan bir xil.
+
+591 test, barchasi real Postgres'da (kod o'zgarmadi — sof tekshiruv).
+
+**14.2-bo'limning kod sifati infratuzilmasida haqiqiy, kichik bo'shliq
+topildi va yopildi: `backend/scripts/`ning o'z type-tekshiruvi CI gate
+emas edi, faqat qo'lda ishga tushiriladigan tekshiruv edi.** CI'ning
+`quality` job'ini o'qib chiqishda aniqlandi: `ruff check .`/`ruff format
+--check .` ikkalasi ham `backend/` ildizidan chaqirilgani uchun
+(`pyproject.toml`da `scripts/`ni istisno qiluvchi hech qanday
+`extend-exclude` yo'q) `scripts/`ni allaqachon qamrab olar edi, lekin
+`mypy src/doda` faqat asosiy ilova kodini tekshirardi — `scripts/`ning
+o'zi hech qachon CI'ning bir qismi bo'lmagan, faqat shu sessiyalarning
+har birida "sog'liq tekshiruvi" sifatida qo'lda (`mypy scripts/`)
+ishga tushirilgan va har safar toza chiqqan.
+
+Bu haqiqiy, ahamiyatsiz bo'shliq emas: `scripts/`dagi 13 ta fayl
+endi faqat "mustaqil monitoring skriptlari" emas —
+`fire_due_reminders_job.py` va `promote_due_action_retries_job.py`
+mos ravishda FR-TASK-005/FR-ACT-005'ning YAGONA kod yo'li bo'lib,
+`ops-jobs.yml` orqali haqiqatda rejalashtirilgan (yuqoriga qarang,
+18 ta haqiqiy eslatma yoqib yuborilgani allaqachon isbotlangan).
+Demak bu kod production xulqini haqiqatda boshqaradi, lekin uning
+tiplari hech qachon CI tomonidan avtomatik tekshirilmagan.
+
+`.github/workflows/ci.yml`ning `quality` job'iga yangi `mypy
+(scripts)` qadami qo'shildi (`mypy scripts`, `mypy src/doda`dan
+KEYIN, alohida qadam sifatida — ikkalasi mustaqil, bittasining xatosi
+ikkinchisini yashirmasin). Audit-zanjiri uslubida isbotlandi:
+`scripts/_ops_lib.py`ga vaqtincha modul darajasidagi aniq type xatosi
+(`TYPE_REGRESSION_PROBE: int = "not an int"`) kiritilib, `mypy
+scripts/` aynan kutilgan `error: Incompatible types in assignment`
+bilan muvaffaqiyatsiz bo'lishi ko'rsatildi, keyin fayl zaxira
+nusxadan tiklanib (`diff` bilan 0 farq tasdiqlab) qaytadan toza
+ekani ko'rsatildi.
+
+591 test o'zgarishsiz (sof CI-konfiguratsiya o'zgarishi, ilova kodiga
+tegilmadi); `ruff format`/`ruff check`/`mypy src/doda`/`mypy scripts/`
+barchasi toza; YAML `yaml.safe_load` bilan tasdiqlangan.
+
+**Product Owner birinchi haqiqiy AI provider kalitini taqdim etdi —
+Google AI Studio'ning bepul Gemini API kaliti — va shu kalit bilan
+chat BIRINCHI MARTA haqiqiy, ishlaydigan model javobini qaytardi.** Bu
+sessiyaning ko'p marta "bu muhitning tarmoq siyosati OpenAI/Gemini/
+Claude'ga chiqishni bloklaydi" deb hujjatlashtirilgan cheklovi oldinroq
+(check-in orqali) qisman o'zgarganligi aniqlangan edi (Gemini/Anthropic
+endpointlari endi haqiqiy serverdan javob qaytaradi), lekin kredensial
+yo'qligi sababli bu hech narsani ochmagan edi — endi kredensial ham
+keldi.
+
+Kalit `backend/.env`ga yozildi (`DODA_GEMINI_API_KEY`, gitignored,
+hech qachon committga tushmaydi, chat matnida ham qaytarilmadi).
+Tekshiruv ikki bosqichda, real HTTP orqali qilindi:
+1. `ai_provider_settings_service.test_provider_connection(Provider.GEMINI,
+   settings)`ni to'g'ridan-to'g'ri chaqirib — bu `GET .../ai-settings`
+   sahifasining "Ulanishni tekshirish" tugmasi bosganda ishlatadigan
+   AYNAN shu funksiya. Uchta urinishdan biri `ok=True` qaytardi,
+   qolgan ikkitasi Google'ning o'z `gemini-3.1-flash-lite` modelida
+   vaqtinchalik ortiqcha yuklanish xabari berdi ("This model is
+   currently experiencing high demand") — bu autentifikatsiya xatosi
+   EMAS (noto'g'ri kalit bo'lsa aniq "invalid API key" qaytargan
+   bo'lardi), balki Google tomonidagi vaqtinchalik holat, kalitning
+   o'zi to'g'ri qabul qilinganini isbotlaydi.
+2. To'liq, haqiqiy chat oqimi: `seed_e2e_demo.py` bilan vaqtinchalik
+   customer/workspace/session yaratib, workspace standart provayderini
+   `PUT .../ai-preference` orqali GEMINI'ga o'rnatib, haqiqiy
+   `POST .../conversations/{id}/messages` so'rovi yuborildi (o'zbekcha
+   savol: "Salom! Bir so'z bilan javob ber: ishlayapsanmi?"). SSE javobi
+   real Gemini'dan keldi: `{"text": "Ha."}`, keyin `done` freymi
+   `provider: "GEMINI"`, `model: "gemini-3.1-flash-lite"` bilan — bu
+   butun orkestratsiya zanjirini (provayder tanlash, byudjet reserve/
+   reconcile, SSE streaming, xabar saqlash) birinchi marta haqiqiy
+   provayderga qarshi, `NullModelGateway`/mock-transport emas, to'liq
+   ishlashini isbotladi.
+
+Hujjatlar yangilandi: `docs/adr/ADR-009-multi-provider-gemini-claude.md`
+ning "no real end-to-end call" degan eski "honest limitation" qatori
+endi yangi haqiqatga mos — Gemini uchun bu cheklov yopildi, Claude
+uchun hamon ochiq (Anthropic kaliti hali kelmagan). `docs/risk-
+register.md`ning RISK-004 qatoriga ham mos yangilanish qo'shildi.
+
+**Production (Render) uchun alohida qadam kerak** — bu sandbox'ning
+`.env`i va Render'ning o'z muhit o'zgaruvchilari ikkita mustaqil
+saqlash joyi, biri ikkinchisiga avtomatik ko'chmaydi. `render.yaml`ga
+`DODA_GEMINI_API_KEY` (`sync: false`) qo'shildi — Google/Telegram
+kredensiallari bilan bir xil naqsh, qiymat hech qachon fayl ichida
+emas. `deploy/README.md`ning "uchta `sync: false`" bo'limi ham mos
+yangilandi, jumladan ANIQ eslatma bilan: `doda-backend` xizmati
+ALLAQACHON mavjud bo'lgani uchun (bu sof Blueprint-dan-noldan-qurish
+emas) Render render.yaml'ga yangi qo'shilgan `sync: false` kalit uchun
+AVTOMATIK qayta so'ramaydi — Product Owner buni xizmatning o'z
+"Environment" bo'limidan qo'lda qo'shishi kerak.
+
+**Halol qolgan holat**: bu kalit faqat SHU sandbox'ning `.env`ida —
+Render'da hali yo'q, shuning uchun production'dagi chat hamon "provayder
+tanlanmagan" xabarini beradi, Product Owner Render dashboard'ida
+yuqoridagi qadamni bajarmaguncha. OpenAI'ning o'zi hamon tarmoq
+darajasida bloklangan (`api.openai.com`), Claude'ning tarmoq yo'li ochiq
+bo'lsa-da, Anthropic kaliti hali taqdim etilmagan.
+
+Kod o'zgarmadi (hech qanday yangi implementatsiya kerak bo'lmadi — butun
+zanjir allaqachon ADR-008/009'da qurilgan edi, faqat kredensial yetishmas
+edi) — 591 test o'zgarishsiz, `ruff`/`mypy` toza.

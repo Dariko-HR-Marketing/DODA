@@ -1,0 +1,68 @@
+name: Uptime check (NFR-REL-001)
+
+# NFR-REL-001's own acceptance criterion names two things by name: "Uptime
+# monitoring" and a "monthly report" (see uptime-monthly-report.yml for the
+# second half). Neither existed anywhere in this repository before — nothing
+# ever pinged the production deployment on a schedule, so an outage would
+# only ever be discovered by a human noticing the app was down.
+#
+# This session cannot reach render.com directly (the same network-policy
+# block documented throughout CLAUDE.md for Telegram/Google/Render) and
+# this agent cannot sign up for a dedicated uptime-monitoring SaaS on the
+# Product Owner's behalf — but GitHub Actions already has unrestricted
+# outbound internet (it runs on GitHub's own infrastructure, not in this
+# sandbox), so a scheduled workflow is the same escape hatch already used
+# for ops-jobs.yml.
+#
+# Inert-by-design until DODA_PROD_HEALTH_URL exists as a repository
+# *variable* (Settings -> Secrets and variables -> Actions -> Variables —
+# not a secret, since a health-check URL is not sensitive) holding the
+# full health endpoint, e.g.
+# https://doda-backend-jv8e.onrender.com/v1/healthz. Until then this is a
+# deliberate, clearly-logged no-op rather than a failing check, same
+# posture as ops-jobs.yml and the Telegram/Google OAuth secrets before
+# they arrived. Deliberately a *variable*, not hardcoded: render.yaml's
+# own comments already document that Render has twice assigned this
+# Blueprint's services a different random hostname suffix — hardcoding a
+# URL here would silently go stale the same way; a variable lets the
+# Product Owner update it without a code change.
+#
+# A single ping would false-alarm on Render's own documented free-tier
+# behavior (deploy/README.md: "free web services spin down with
+# inactivity, ~50s cold start") — retrying for roughly a minute absorbs a
+# cold start as a non-event, the same tolerance the frontend's own
+# post-login retry already applies, while still catching a real outage
+# that outlasts it.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: uptime-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Ping production health endpoint
+    runs-on: ubuntu-latest
+    env:
+      HEALTH_URL: ${{ vars.DODA_PROD_HEALTH_URL }}
+    steps:
+      - name: Skipped — DODA_PROD_HEALTH_URL repository variable not set yet
+        if: ${{ env.HEALTH_URL == '' }}
+        run: echo "See deploy/README.md for how to set it."
+      - name: Ping, tolerating Render's documented free-tier cold start
+        if: ${{ env.HEALTH_URL != '' }}
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            if curl -fsS --max-time 10 "$HEALTH_URL" > /dev/null; then
+              echo "up (attempt $attempt)"
+              exit 0
+            fi
+            echo "attempt $attempt did not return 2xx, retrying in 10s..."
+            sleep 10
+          done
+          echo "::error::$HEALTH_URL did not return 2xx after 6 attempts (~60s) — treating as down"
+          exit 1

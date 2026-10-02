@@ -1,0 +1,67 @@
+name: Uptime monthly report (NFR-REL-001)
+
+# The second half of NFR-REL-001's acceptance criterion ("Uptime
+# monitoring, oylik hisobot" — uptime monitoring, monthly report).
+# uptime-check.yml is the monitoring half; this is the report, built
+# without any new secret or external storage — GitHub already retains
+# every workflow run's outcome, queryable through the default
+# GITHUB_TOKEN via `gh run list`, so a coarse uptime percentage (checks
+# succeeded / checks run, over the last 30 days, at uptime-check.yml's
+# own ~10-minute cadence) can be computed from data GitHub already has.
+#
+# Honest limits, stated rather than glossed over: this is not a
+# dedicated SRE dashboard (that is NFR-REL-002's own, separate, more
+# demanding acceptance criterion — "error budget, feature freeze if
+# spent" — not attempted here) and it is not a continuous monitor,
+# only a sample every ~10 minutes; a brief outage between two checks
+# would not show up. It reports to the run's own Job Summary (visible
+# under this workflow's run history in the Actions tab), which is the
+# honest, no-new-infrastructure equivalent of a report — not a
+# standing webpage.
+
+on:
+  schedule:
+    - cron: "17 6 1 * *"
+  workflow_dispatch: {}
+
+permissions:
+  actions: read
+
+jobs:
+  report:
+    name: Summarize the last 30 days of uptime checks
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Compute uptime percentage from uptime-check.yml's run history
+        run: |
+          set -euo pipefail
+          since=$(date -u -d '30 days ago' +%Y-%m-%d)
+          # One fetch of the last 30 days' run history — both numbers
+          # below are derived from this same cached payload, not two
+          # separate hits against GitHub's API for the same run set.
+          runs=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow uptime-check.yml \
+            --created ">=$since" --json conclusion)
+          total=$(echo "$runs" | jq 'length')
+          if [ "$total" -eq 0 ]; then
+            {
+              echo "## Uptime report — last 30 days"
+              echo ""
+              echo "No uptime-check runs found in this window — either"
+              echo "\`DODA_PROD_HEALTH_URL\` is not set yet (see"
+              echo "deploy/README.md), or the workflow has not run for a"
+              echo "full 30 days yet."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          success=$(echo "$runs" | jq '[.[] | select(.conclusion == "success")] | length')
+          pct=$(python3 -c "print(f'{$success / $total * 100:.2f}')")
+          {
+            echo "## Uptime report — last 30 days"
+            echo ""
+            echo "- Checks run (~every 10 min): $total"
+            echo "- Checks that returned 2xx (after cold-start tolerance): $success"
+            echo "- Uptime: ${pct}%"
+            echo "- NFR-REL-001 target: 99.5%"
+          } >> "$GITHUB_STEP_SUMMARY"

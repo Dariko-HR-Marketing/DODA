@@ -1,0 +1,60 @@
+name: Bootstrap first customer (manual, one-off)
+
+# A thin, manually-triggered wrapper around backend/scripts/
+# bootstrap_first_customer.py — see that script's own docstring for why it
+# exists: a real Google login (FR-AUTH-001) can succeed on a fresh
+# production deployment while /v1/me/workspaces stays honestly empty,
+# because Customer creation is deliberately NOT public (2.3: self-serve
+# signup is OUT OF SCOPE for v1). This workflow is the operator's way to
+# run that one-off provisioning step against a real production database
+# this session's own network policy cannot reach directly (it blocks
+# render.com and effectively all external hosts outside a small
+# npm/pypi/GitHub/Anthropic allowlist) — GitHub Actions runs on GitHub's
+# own infrastructure, with no such restriction.
+#
+# Inert-by-design until DODA_PROD_DATABASE_URL exists as a repository
+# secret — same secret ops-jobs.yml already depends on, so setting it up
+# once unblocks both. The script itself refuses to run twice for the same
+# user (see its own duplicate-guard) rather than trusting this workflow's
+# caller not to double-trigger it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      display_name:
+        description: "Exact Google account display name (e.g. the name shown on Google's account-chooser screen)"
+        required: true
+      customer_name:
+        description: "Name for the new Customer"
+        required: true
+      workspace_name:
+        description: "Name for the new Workspace"
+        required: true
+
+defaults:
+  run:
+    working-directory: backend
+
+env:
+  DODA_DATABASE_URL: ${{ secrets.DODA_PROD_DATABASE_URL }}
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+      - name: Run
+        if: ${{ env.DODA_DATABASE_URL != '' }}
+        run: |
+          python scripts/bootstrap_first_customer.py \
+            --display-name "${{ github.event.inputs.display_name }}" \
+            --customer-name "${{ github.event.inputs.customer_name }}" \
+            --workspace-name "${{ github.event.inputs.workspace_name }}"
+      - name: Skipped — DODA_PROD_DATABASE_URL secret not set yet
+        if: ${{ env.DODA_DATABASE_URL == '' }}
+        run: echo "See deploy/README.md for how to set it."

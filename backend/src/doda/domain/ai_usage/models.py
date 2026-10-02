@@ -69,7 +69,12 @@ class AIUsageEvent(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     new row per state, unlike AuditEvent, because this is a cost ledger
     entry being finalized, not an immutable historical fact being
     recorded; the *audit* trail for the same call is a separate
-    `ai.gateway_call.v1` AuditEvent, written only once reconciled)."""
+    `ai.gateway_call.v1` AuditEvent — NFR-DATA-001b, recording the TRD
+    13.2 data class of what was sent — written by
+    `doda.application.conversation_service.stream_message`'s
+    `_reconcile_and_record` for both RECONCILED and REFUNDED turns, since
+    either one means a real request was at least attempted against the
+    provider)."""
 
     __tablename__ = "ai_usage_events"
 
@@ -120,3 +125,20 @@ class AIBudgetLedger(Base):
     """Sum of outstanding RESERVED AIUsageEvent estimates not yet reconciled."""
     actual_cents: Mapped[int] = mapped_column(default=0)
     """Sum of RECONCILED AIUsageEvent actual costs this month."""
+
+
+class CustomerAIBudgetOverride(Base):
+    """FR-ADM-005: "AI byudjeti va limitlarni belgilash" — a per-customer
+    override of `Settings.ai_budget_soft_usd_per_customer_month`/
+    `ai_budget_hard_usd_per_customer_month`, which are otherwise the SAME
+    fixed value for every customer on this deployment. No row means "use
+    the deployment-wide default" (same "absence = default" convention as
+    `notification_preferences`/`workspace_language_settings`), not zero —
+    a customer with no override is not silently given a $0 budget.
+    """
+
+    __tablename__ = "ai_budget_overrides"
+
+    customer_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    soft_cap_cents: Mapped[int]
+    hard_cap_cents: Mapped[int]

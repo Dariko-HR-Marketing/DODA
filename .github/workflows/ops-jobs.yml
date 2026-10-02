@@ -1,0 +1,110 @@
+name: Ops jobs
+
+# The "cron/systemd wrapper" every script under backend/scripts/*_job.py
+# (plus the two stuck-action detectors) says in its own docstring it is
+# written to run under — none of them schedule themselves, and nothing
+# else in this repository ever did either. Without this workflow (or an
+# operator-run equivalent), these scripts only ever ran when someone
+# happened to invoke them by hand during development.
+#
+# Two of these are not just observability — they are the only thing that
+# ever executes already-shipped, already-tested product behavior outside
+# a dev/test session:
+#   - fire_due_reminders_job.py is what turns a confirmed, due FR-TASK-005
+#     reminder into an actual notification.
+#   - promote_due_action_retries_job.py is what promotes a RETRYING
+#     FR-ACT-005 action back to READY once its backoff has elapsed.
+# Without a scheduler driving these, both features are fully built and
+# tested but inert in any real deployment.
+#
+# Inert-by-design until DODA_PROD_DATABASE_URL exists as a repository
+# secret (a real production Postgres connection string, e.g. Render's own
+# `doda-postgres` database's connection string). Until then every run here
+# is a deliberate, clearly-logged no-op rather than a failing check — the
+# same "wait quietly for a credential, never guess or fabricate one"
+# posture this project has already followed for the Telegram bot token and
+# the Google OAuth client secret before either arrived. A script's own
+# non-zero exit still fails its job here, which GitHub already surfaces as
+# a red check and (by default) an email to the repo's watchers — exactly
+# the "alert is this process's exit status, let the wrapper handle the
+# rest" design every one of these scripts documents for itself; no new
+# notification channel was invented for this.
+#
+# One job per script, not one job running several scripts in sequence: a
+# transient failure in one (e.g. a stray stuck RUNNING action) must never
+# prevent the others from running, and each gets its own independent
+# red/green check in the Actions tab.
+
+on:
+  schedule:
+    # Frequent cadence: FR-TASK-005/FR-ACT-005 need low latency after their
+    # own due time to be useful. 15 minutes is a deliberately reasonable
+    # default — both scripts' own docstrings are explicit that the exact
+    # cadence is a hosting/operational tuning knob (OD-005), not something
+    # they pick for themselves; it can change here with no code change.
+    - cron: "*/15 * * * *"
+    # Daily cadence: FR-AUD-004's own acceptance criterion names a "Kunlik"
+    # (daily) verification job by name. The two lower-urgency observability
+    # scripts (stuck-action detectors, trace completeness) ride along on
+    # the same daily run.
+    - cron: "11 2 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: ops-jobs
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: backend
+
+env:
+  DODA_DATABASE_URL: ${{ secrets.DODA_PROD_DATABASE_URL }}
+
+jobs:
+  # A single job with a 6-entry matrix, not 6 hand-copied jobs: GitHub
+  # Actions gives each matrix entry its own independent check in the
+  # Actions tab (e.g. "ops-jobs / run (fire-due-reminders)"), which is
+  # exactly the "one script's failure never blocks another, each gets
+  # its own red/green check" property the comment above requires —
+  # `fail-fast: false` is what makes that true (without it, one failing
+  # entry would cancel the rest mid-run).
+  run:
+    name: ${{ matrix.name }}
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == matrix.cron
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - script: fire_due_reminders_job.py
+            name: Fire due reminders (FR-TASK-005)
+            cron: "*/15 * * * *"
+          - script: promote_due_action_retries_job.py
+            name: Promote due retries (FR-ACT-005)
+            cron: "*/15 * * * *"
+          - script: verify_audit_chain_job.py
+            name: Verify audit hash chain (FR-AUD-004)
+            cron: "11 2 * * *"
+          - script: find_stuck_running_actions.py
+            name: Find stuck RUNNING actions
+            cron: "11 2 * * *"
+          - script: find_stuck_compensating_actions.py
+            name: Find stuck COMPENSATING actions (FR-ACT-009)
+            cron: "11 2 * * *"
+          - script: verify_trace_completeness_job.py
+            name: Verify trace completeness (NFR-OBS-001)
+            cron: "11 2 * * *"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+      - name: Run
+        if: ${{ env.DODA_DATABASE_URL != '' }}
+        run: python scripts/${{ matrix.script }}
+      - name: Skipped — DODA_PROD_DATABASE_URL secret not set yet
+        if: ${{ env.DODA_DATABASE_URL == '' }}
+        run: echo "See deploy/README.md for how to set it."

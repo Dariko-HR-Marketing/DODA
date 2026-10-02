@@ -23,6 +23,7 @@ from httpx import ASGITransport, AsyncClient
 
 from doda.application.session_service import create_session
 from doda.application.workspace_service import create_workspace
+from doda.config import Settings
 from doda.db import tenant_scoped_session
 from doda.domain.customer.models import Customer, CustomerMembership
 from doda.domain.identity.models import AuthStrength, User
@@ -35,6 +36,12 @@ async def client():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+
+
+@pytest.fixture
+def knowledge_storage_settings(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(knowledge_storage_dir=str(tmp_path))  # type: ignore[arg-type]
+    monkeypatch.setattr("doda.api.knowledge.get_settings", lambda: settings)
 
 
 def _auth_headers(session_id: uuid.UUID) -> dict[str, str]:
@@ -340,6 +347,123 @@ async def test_a_sibling_workspaces_action_compensation_cannot_be_completed(
     response = await client.post(
         f"/v1/workspaces/{seeded['workspace_a']}/actions/{action_id}/compensate/complete",
         json={"outcome": "COMPENSATED"},
+        headers=_auth_headers(seeded["session_a"]),
+    )
+    assert response.status_code == 404
+
+
+async def test_a_document_from_a_sibling_workspace_is_not_readable(
+    client: AsyncClient, db_available: bool, knowledge_storage_settings: None
+) -> None:
+    seeded = await _seed_two_workspaces_one_customer()
+
+    uploaded = await client.post(
+        f"/v1/workspaces/{seeded['workspace_b']}/documents",
+        files={"file": ("report.pdf", b"%PDF-1.4\nreal pdf body", "application/pdf")},
+        headers=_auth_headers(seeded["session_b"]),
+    )
+    assert uploaded.status_code == 200
+    document_id = uploaded.json()["id"]
+
+    cross_workspace_get = await client.get(
+        f"/v1/workspaces/{seeded['workspace_a']}/documents/{document_id}",
+        headers=_auth_headers(seeded["session_a"]),
+    )
+    assert cross_workspace_get.status_code == 404
+
+    cross_workspace_download = await client.get(
+        f"/v1/workspaces/{seeded['workspace_a']}/documents/{document_id}/content",
+        headers=_auth_headers(seeded["session_a"]),
+    )
+    assert cross_workspace_download.status_code == 404
+
+    # Untouched: B can still read/download their own document through B.
+    own_get = await client.get(
+        f"/v1/workspaces/{seeded['workspace_b']}/documents/{document_id}",
+        headers=_auth_headers(seeded["session_b"]),
+    )
+    assert own_get.status_code == 200
+
+
+async def test_a_task_cannot_be_linked_to_a_sibling_workspaces_document(
+    client: AsyncClient, db_available: bool, knowledge_storage_settings: None
+) -> None:
+    """FR-TASK-006's own cross-tenant-existence-oracle guard
+    (attach_document_to_task's workspace check), the same shape as
+    parent_task_id's — a document that exists, just in a different
+    workspace under the same customer, must never be linkable."""
+    seeded = await _seed_two_workspaces_one_customer()
+
+    task = await client.post(
+        f"/v1/workspaces/{seeded['workspace_a']}/tasks",
+        json={"title": "A's task"},
+        headers=_auth_headers(seeded["session_a"]),
+    )
+    assert task.status_code == 200
+    task_id = task.json()["id"]
+
+    uploaded = await client.post(
+        f"/v1/workspaces/{seeded['workspace_b']}/documents",
+        files={"file": ("report.pdf", b"%PDF-1.4\nreal pdf body", "application/pdf")},
+        headers=_auth_headers(seeded["session_b"]),
+    )
+    assert uploaded.status_code == 200
+    document_id = uploaded.json()["id"]
+
+    response = await client.post(
+        f"/v1/workspaces/{seeded['workspace_a']}/tasks/{task_id}/attachments",
+        json={"document_id": document_id},
+        headers=_auth_headers(seeded["session_a"]),
+    )
+    assert response.status_code == 404
+
+
+async def test_a_sibling_workspaces_message_cannot_be_targeted_for_regeneration(
+    client: AsyncClient, db_available: bool
+) -> None:
+    """FR-CONV-007's `regenerate_message` has no `workspace_id` column on
+    `Message` to compare against directly (unlike the other guards in this
+    file) — its equivalent protection is that `message_id` is only ever
+    looked up inside `list_messages(conversation_id=<the URL's own,
+    already-validated conversation>)`. This proves that scoping actually
+    holds: A's own, otherwise-valid conversation_id does not let A reach
+    B's message_id just by naming it."""
+    seeded = await _seed_two_workspaces_one_customer()
+
+    conversation_a = await client.post(
+        f"/v1/workspaces/{seeded['workspace_a']}/conversations",
+        json={},
+        headers=_auth_headers(seeded["session_a"]),
+    )
+    assert conversation_a.status_code == 200
+    conversation_a_id = conversation_a.json()["id"]
+
+    conversation_b = await client.post(
+        f"/v1/workspaces/{seeded['workspace_b']}/conversations",
+        json={},
+        headers=_auth_headers(seeded["session_b"]),
+    )
+    assert conversation_b.status_code == 200
+    conversation_b_id = conversation_b.json()["id"]
+    async with client.stream(
+        "POST",
+        f"/v1/workspaces/{seeded['workspace_b']}/conversations/{conversation_b_id}/messages",
+        json={"content": "B's own message", "mode": "STANDARD"},
+        headers=_auth_headers(seeded["session_b"]),
+    ) as posted:
+        assert posted.status_code == 200
+        await posted.aread()
+
+    b_messages = await client.get(
+        f"/v1/workspaces/{seeded['workspace_b']}/conversations/{conversation_b_id}/messages",
+        headers=_auth_headers(seeded["session_b"]),
+    )
+    message_b_id = b_messages.json()[0]["id"]
+
+    # A names its OWN, valid conversation_id, but B's message_id.
+    response = await client.post(
+        f"/v1/workspaces/{seeded['workspace_a']}/conversations/{conversation_a_id}/messages/{message_b_id}/regenerate",
+        json={"content": "A tries to hijack B's message"},
         headers=_auth_headers(seeded["session_a"]),
     )
     assert response.status_code == 404

@@ -39,11 +39,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from doda.ai.capabilities import assert_supports_tools
+from doda.ai.data_classification import DataClassification, classify_outbound_content
 from doda.ai.errors import (
     ModelProviderError,
     ModelRateLimitedError,
     ModelTimeoutError,
     OutboundContentBlockedError,
+    SensitiveContentBlockedError,
 )
 from doda.ai.factory import get_gateway
 from doda.ai.language import detect_language, response_language_instruction
@@ -69,11 +71,13 @@ from doda.application.ai_tools import (
     is_write_tool,
     propose_write_tool_action,
 )
+from doda.application.audit_service import record_audit_event
 from doda.application.authz_service import WorkspaceContext
 from doda.application.workspace_service import get_workspace_language
 from doda.config import Settings
 from doda.domain.ai_usage.models import UsageEventStatus
 from doda.domain.conversation.models import Conversation, Message, MessageRole
+from doda.domain.identity.models import ActorKind
 from doda.infrastructure.ai_pricing import estimate_cost_cents, estimate_input_tokens_from_chars
 
 MAX_PAGE_SIZE = 200
@@ -88,6 +92,30 @@ _MAX_OUTPUT_TOKENS_BY_MODE = {
 class DeepRequestCostCeilingExceededError(Exception):
     """DEEP mode's own, separate per-request cost guard — distinct from
     the shared monthly BudgetExceededError."""
+
+
+class MessageNotFoundForRegenerationError(Exception):
+    """FR-CONV-007: the referenced message does not exist in this
+    conversation — raised before any tenancy-revealing distinction
+    between "wrong id" and "belongs to a different conversation"."""
+
+
+class CannotRegenerateNonUserMessageError(Exception):
+    """FR-CONV-007 only lets a user edit their OWN message and regenerate
+    the response to it — an ASSISTANT or TOOL message is not something a
+    user "edits", it is something the model/connector produced."""
+
+
+class RegenerationTargetNotLatestError(Exception):
+    """FR-CONV-007 is deliberately scoped to the conversation's single
+    most recent user turn, not an arbitrary one further back — editing an
+    earlier message would require deciding how to represent a branching
+    conversation history (which later messages, if any, stay attached to
+    which version), a UX/design question the TRD's one-line acceptance
+    criterion ("new trace_id, doesn't delete the old one") does not
+    answer. Scoping to "latest only" sidesteps that: there is nothing
+    after the latest user turn to branch from, so regenerating it is an
+    unambiguous linear operation."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -285,6 +313,8 @@ async def stream_message(
     mode: ChatMode,
     trace_id: uuid.UUID,
     settings: Settings,
+    actor_kind: ActorKind,
+    exclude_message_ids: frozenset[uuid.UUID] = frozenset(),
 ) -> typing.AsyncGenerator[TurnChunk, None]:
     """An async generator of `TurnChunk`s — the API layer
     (`api/conversations.py`) turns each into an SSE event, and also
@@ -296,6 +326,20 @@ async def stream_message(
     yielding anything and before any provider call, so a caller can
     translate those into a clean 4xx without any partial stream having
     started.
+
+    `actor_kind` is threaded straight through to
+    `ai_tools.propose_write_tool_action` (FR-AUTH-009's R2 cap) — this
+    parameter has no default precisely so a Service Actor chatting
+    cannot silently fall back to being treated as human here, the way
+    the 15th security-review pass found this exact call site doing
+    before `propose_action`'s own `actor_kind` was made a required
+    keyword.
+
+    `exclude_message_ids` is FR-CONV-007's own hook, empty by default
+    (every ordinary call is unaffected): `regenerate_message` below uses
+    it to keep the model from seeing the stale edited-away message and
+    its old response, without deleting either row — they are excluded
+    only from THIS turn's history, never from storage.
     """
     # OD-003: block before the message is even persisted, let alone sent
     # to any provider — see doda.ai.outbound_guard's own docstring for
@@ -304,6 +348,17 @@ async def stream_message(
     if secret_label is not None:
         raise OutboundContentBlockedError(
             "the message looks like it contains a live credential", label=secret_label
+        )
+
+    # NFR-DATA-001b/c: classify what TRD 13.2 class this turn's content
+    # falls into (a C5 credential has already been ruled out above), block
+    # C4 outright (OD-003's default), and keep the classification around
+    # to record once the turn's own audit event is written below.
+    data_classification = classify_outbound_content(content)
+    if data_classification is DataClassification.C4_SENSITIVE:
+        raise SensitiveContentBlockedError(
+            "the message looks like it contains C4-sensitive data (financial/medical/legal)",
+            classification=data_classification.value,
         )
 
     user_message = Message(
@@ -359,9 +414,28 @@ async def stream_message(
     # here, not discovered as a silent no-op.
     assert_supports_tools(choice.provider, requested_tools=[t.name for t in tools])
 
-    history = _messages_to_history(
-        await list_messages(session, conversation_id=conversation.id), max_chars=settings.ai_max_context_chars
-    )
+    all_messages = await list_messages(session, conversation_id=conversation.id)
+    if exclude_message_ids:
+        all_messages = [m for m in all_messages if m.id not in exclude_message_ids]
+    history = _messages_to_history(all_messages, max_chars=settings.ai_max_context_chars)
+
+    def _append_tool_result(call: ToolCallRequest, text: str) -> None:
+        """Shared tail of the read-tool and unregistered-tool-call branches
+        below: persist the TOOL-role Message and feed the same result back
+        into `history` so the next round's replay has an answer for every
+        `call.call_id` the model saw — a 6th-`/simplify`-pass reuse fix, the
+        two branches previously wrote this identical shape independently."""
+        session.add(
+            Message(
+                customer_id=conversation.customer_id,
+                conversation_id=conversation.id,
+                role=MessageRole.TOOL,
+                content=text,
+                tool_call_id=call.call_id,
+            )
+        )
+        history.append(ChatTurn(role=ChatRole.TOOL, content=text, tool_call_id=call.call_id))
+
     estimated_input_tokens = estimate_input_tokens_from_chars(sum(len(t.content) for t in history))
     per_round_cost_cents = estimate_cost_cents(
         choice.provider, model, input_tokens=estimated_input_tokens, output_tokens=max_output_tokens
@@ -421,6 +495,28 @@ async def stream_message(
             actual_cost_cents=actual_cost_cents,
             status=status,
         )
+        # NFR-DATA-001b: "har bir tashqi AI so'rovi uchun yuborilgan
+        # ma'lumot sinfi telemetriyada yoziladi" — written here regardless
+        # of RECONCILED/REFUNDED, since both mean an external request was
+        # at least attempted against `choice.provider` this turn (a
+        # BudgetExceededError/DeepRequestCostCeilingExceededError/
+        # ProviderDisabledError raised earlier never reaches this
+        # function at all, correctly recording nothing for a turn that
+        # never made it to the provider).
+        await record_audit_event(
+            session,
+            customer_id=workspace_context.customer_id,
+            workspace_id=workspace_context.workspace_id,
+            actor_id=f"user:{workspace_context.user_id}",
+            trace_id=trace_id,
+            event_type="ai.gateway_call.v1",
+            safe_metadata={
+                "provider": choice.provider.value,
+                "model": model,
+                "mode": mode.value,
+                "data_classification": data_classification.value,
+            },
+        )
 
     try:
         fallback_attempted = False
@@ -471,8 +567,29 @@ async def stream_message(
 
                     # At least one tool call: persist the assistant's tool-call
                     # turn(s), then either dispatch (read) or stop (write).
-                    write_calls = [c for c in tool_calls_this_round if is_write_tool(c.name)]
-                    read_calls = [c for c in tool_calls_this_round if is_read_tool(c.name)]
+                    # One pass over tool_calls_this_round, not three separate
+                    # comprehensions each re-checking is_write_tool/
+                    # is_read_tool — FR-ACT-001's own unregistered_calls
+                    # bucket is exhaustive by construction here, not by a
+                    # separate "matches neither" re-scan.
+                    write_calls: list[ToolCallRequest] = []
+                    read_calls: list[ToolCallRequest] = []
+                    unregistered_calls: list[ToolCallRequest] = []
+                    for c in tool_calls_this_round:
+                        if is_write_tool(c.name):
+                            write_calls.append(c)
+                        elif is_read_tool(c.name):
+                            read_calls.append(c)
+                        else:
+                            # FR-ACT-001: a call to a tool name in neither
+                            # registry must be rejected AND audited — before
+                            # this, such a call fell out of both buckets
+                            # above and was silently dropped (no tool-result
+                            # message for its call_id, no audit trail),
+                            # which would also leave the next round's
+                            # history with an unanswered tool_call most
+                            # providers' own APIs reject outright.
+                            unregistered_calls.append(c)
 
                     for call in tool_calls_this_round:
                         assistant_tool_message = Message(
@@ -509,6 +626,7 @@ async def stream_message(
                             workspace_context=workspace_context,
                             trace_id=trace_id,
                             idempotency_key=idempotency_key,
+                            actor_kind=actor_kind,
                         )
                         status_text = (
                             f"Men '{call.name}' vositasini taklif qildim — holati: {action.status.value}. "
@@ -528,6 +646,19 @@ async def stream_message(
                         yield TurnChunk(kind="tool_status", text=status_text)
                         break
 
+                    for call in unregistered_calls:
+                        error_text = f"Tool error: '{call.name}' is not a registered tool."
+                        await record_audit_event(
+                            session,
+                            customer_id=workspace_context.customer_id,
+                            workspace_id=workspace_context.workspace_id,
+                            trace_id=trace_id,
+                            actor_id=f"user:{workspace_context.user_id}",
+                            event_type="ai_tool.unregistered_call_rejected.v1",
+                            safe_metadata={"tool_name": call.name},
+                        )
+                        _append_tool_result(call, error_text)
+
                     for call in read_calls:
                         try:
                             result_text = await dispatch_read_tool(
@@ -538,17 +669,7 @@ async def stream_message(
                             )
                         except Exception as exc:  # ToolArgumentsInvalidError/ToolNotFoundError
                             result_text = f"Tool error: {exc}"
-                        tool_result_message = Message(
-                            customer_id=conversation.customer_id,
-                            conversation_id=conversation.id,
-                            role=MessageRole.TOOL,
-                            content=result_text,
-                            tool_call_id=call.call_id,
-                        )
-                        session.add(tool_result_message)
-                        history.append(
-                            ChatTurn(role=ChatRole.TOOL, content=result_text, tool_call_id=call.call_id)
-                        )
+                        _append_tool_result(call, result_text)
                     await session.flush()
                 else:
                     # Exhausted ai_max_tool_rounds without a final text answer —
@@ -635,3 +756,63 @@ async def stream_message(
     await _reconcile_and_record(UsageEventStatus.RECONCILED)
 
     yield TurnChunk(kind="done", message=final_assistant_message)
+
+
+def regenerate_message(
+    session: AsyncSession,
+    conversation: Conversation,
+    *,
+    message_id: uuid.UUID,
+    new_content: str,
+    all_messages: list[Message],
+    workspace_context: WorkspaceContext,
+    mode: ChatMode,
+    trace_id: uuid.UUID,
+    settings: Settings,
+    actor_kind: ActorKind,
+) -> typing.AsyncGenerator[TurnChunk, None]:
+    """FR-CONV-007: "Xabarni tahrirlash va qayta generatsiya qilish" —
+    edit the conversation's own latest USER message and regenerate the
+    response to it. `all_messages` is `list_messages(...)`'s result,
+    already fetched by the caller (it needs it anyway to find
+    `message_id`), ordered by `created_at` ascending.
+
+    Deliberately scoped to the LATEST user turn only — see
+    `RegenerationTargetNotLatestError`'s own docstring for why editing an
+    arbitrary earlier message is a design question this does not answer.
+    Being the latest turn makes "what to exclude from history" unambiguous:
+    the edited message itself plus everything at or after its timestamp
+    (its own TOOL/ASSISTANT rows, nothing else can follow it) — those rows
+    are never deleted, only left out of the NEW turn's context, satisfying
+    the acceptance criterion's "yangi trace_id hosil qiladi, eskisini
+    o'chirmaydi" literally: a new turn (and hence a new trace_id, minted
+    the same way every HTTP request's is — `api/conversations.py`'s own
+    TraceIdMiddleware reasoning) replaces nothing in storage.
+    """
+    target_index = next((i for i, m in enumerate(all_messages) if m.id == message_id), None)
+    if target_index is None:
+        raise MessageNotFoundForRegenerationError(f"message {message_id} not found")
+    target = all_messages[target_index]
+    if target.role is not MessageRole.USER:
+        raise CannotRegenerateNonUserMessageError("only a USER message may be edited and regenerated")
+    # `all_messages` is ascending by created_at (list_messages' own
+    # guarantee), so "target is the latest USER message" is just "no
+    # later USER message exists" — no need for a separate max()-over-the-
+    # whole-list scan to find and compare against the latest one.
+    if any(m.role is MessageRole.USER for m in all_messages[target_index + 1 :]):
+        raise RegenerationTargetNotLatestError(
+            "only the conversation's most recent user message may be regenerated"
+        )
+
+    exclude_message_ids = frozenset(m.id for m in all_messages[target_index:])
+    return stream_message(
+        session,
+        conversation,
+        workspace_context=workspace_context,
+        content=new_content,
+        mode=mode,
+        trace_id=trace_id,
+        settings=settings,
+        actor_kind=actor_kind,
+        exclude_message_ids=exclude_message_ids,
+    )

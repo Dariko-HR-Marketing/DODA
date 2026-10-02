@@ -20,29 +20,40 @@ from doda.ai.errors import (
     ModelRateLimitedError,
     ModelTimeoutError,
     OutboundContentBlockedError,
+    SensitiveContentBlockedError,
 )
 from doda.api.middleware import TRACE_ID_HEADER
 from doda.application.action_service import (
     ActionNotCancellableError,
     ApprovalInvalidError,
     InvalidCompensationOutcomeError,
+    ServiceActorRiskLevelExceededError,
 )
+from doda.application.ai_budget_service import InvalidBudgetOverrideError
 from doda.application.ai_provider_settings_service import ProviderDisabledError
 from doda.application.authz_service import AuthorizationError
-from doda.application.conversation_service import DeepRequestCostCeilingExceededError
+from doda.application.conversation_service import (
+    CannotRegenerateNonUserMessageError,
+    DeepRequestCostCeilingExceededError,
+    MessageNotFoundForRegenerationError,
+    RegenerationTargetNotLatestError,
+)
 from doda.application.customer_service import CustomerMembershipError, DuplicateMembershipError
 from doda.application.kill_switch_service import KillSwitchEngagedError
 from doda.application.notification_service import NotificationPreferenceError
 from doda.application.oidc_login_service import OidcNotConfiguredError, OidcStateMismatchError
+from doda.application.service_actor_service import ServiceActorAuthenticationError
 from doda.application.session_service import SessionInvalidError
 from doda.application.task_service import (
     InvalidTaskTransition,
     ReminderConfirmationMismatchError,
     ReminderNotPendingError,
+    TaskAttachmentDocumentNotFoundError,
     TaskParentNotFoundError,
 )
 from doda.application.workspace_service import DuplicateWorkspaceMembershipError, WorkspaceMembershipError
 from doda.domain.action.state_machine import InvalidActionTransition
+from doda.domain.knowledge.file_validation import FileValidationError
 from doda.domain.security.decisions import Decision
 from doda.infrastructure.google_oidc_client import GoogleOidcError
 
@@ -61,6 +72,26 @@ def _envelope(
 
 def _trace_id(request: Request) -> str:
     return getattr(request.state, "trace_id", str(uuid.uuid4()))
+
+
+def _blocked_content_response(
+    request: Request, *, code: str, message: str, log_event: str, **log_fields: object
+) -> JSONResponse:
+    """Shared HTTP-422 shape for `stream_message`'s two "content refused
+    before persisting/sending" guards (`OutboundContentBlockedError`,
+    `SensitiveContentBlockedError`) — both log one warning field naming
+    WHAT matched (a fixed pattern label or a TRD 13.2 class), never the
+    matched text itself, then return the same envelope shape. Kept as one
+    helper rather than two independent handler bodies once a second,
+    near-identical occurrence appeared (6th `/simplify` pass) — the two
+    underlying *detectors* stay separate (one is an absolute block, the
+    other's own docstring says it may become a configurable per-workspace
+    policy later), only this response-building tail is shared."""
+    logger.warning(log_event, trace_id=_trace_id(request), **log_fields)
+    return JSONResponse(
+        status_code=422,
+        content=_envelope(code=code, message=message, trace_id=_trace_id(request), retryable=False),
+    )
 
 
 logger = structlog.get_logger()
@@ -134,6 +165,20 @@ def register_exception_handlers(app: FastAPI) -> None:
             ),
         )
 
+    @app.exception_handler(TaskAttachmentDocumentNotFoundError)
+    async def _task_attachment_document_not_found(
+        request: Request, exc: TaskAttachmentDocumentNotFoundError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=404,
+            content=_envelope(
+                code="NOT_FOUND",
+                message="Fayl topilmadi.",
+                trace_id=_trace_id(request),
+                retryable=False,
+            ),
+        )
+
     @app.exception_handler(ReminderNotPendingError)
     async def _reminder_not_pending(request: Request, exc: ReminderNotPendingError) -> JSONResponse:
         return JSONResponse(
@@ -155,6 +200,18 @@ def register_exception_handlers(app: FastAPI) -> None:
             content=_envelope(
                 code="REMINDER_INVALID",
                 message="Tasdiqlanayotgan vaqt reminder'ning joriy qiymatiga mos kelmadi.",
+                trace_id=_trace_id(request),
+                retryable=False,
+            ),
+        )
+
+    @app.exception_handler(FileValidationError)
+    async def _file_validation_failed(request: Request, exc: FileValidationError) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content=_envelope(
+                code="INVALID_FILE",
+                message=str(exc),
                 trace_id=_trace_id(request),
                 retryable=False,
             ),
@@ -193,6 +250,34 @@ def register_exception_handlers(app: FastAPI) -> None:
             content=_envelope(
                 code="INVALID_COMPENSATION_OUTCOME",
                 message="Kompensatsiya natijasi COMPENSATED yoki FAILED bo'lishi kerak.",
+                trace_id=_trace_id(request),
+                retryable=False,
+            ),
+        )
+
+    @app.exception_handler(ServiceActorRiskLevelExceededError)
+    async def _service_actor_risk_level_exceeded(
+        request: Request, exc: ServiceActorRiskLevelExceededError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=403,
+            content=_envelope(
+                code="SERVICE_ACTOR_RISK_LEVEL_EXCEEDED",
+                message="Service Actor faqat R0-R2 action taklif qila oladi.",
+                trace_id=_trace_id(request),
+                retryable=False,
+            ),
+        )
+
+    @app.exception_handler(ServiceActorAuthenticationError)
+    async def _service_actor_authentication_error(
+        request: Request, exc: ServiceActorAuthenticationError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=401,
+            content=_envelope(
+                code="UNAUTHENTICATED",
+                message="Service actor credential yaroqsiz.",
                 trace_id=_trace_id(request),
                 retryable=False,
             ),
@@ -326,19 +411,43 @@ def register_exception_handlers(app: FastAPI) -> None:
             ),
         )
 
+    @app.exception_handler(InvalidBudgetOverrideError)
+    async def _invalid_budget_override(request: Request, exc: InvalidBudgetOverrideError) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content=_envelope(
+                code="INVALID_BUDGET_LIMITS",
+                message=str(exc),
+                trace_id=_trace_id(request),
+                retryable=False,
+            ),
+        )
+
     @app.exception_handler(OutboundContentBlockedError)
     async def _outbound_content_blocked(request: Request, exc: OutboundContentBlockedError) -> JSONResponse:
         # 10.1/OD-003: never echo the matched text back — only the fixed
         # pattern label, which names a credential TYPE, not its value.
-        logger.warning("ai_outbound_content_blocked", trace_id=_trace_id(request), pattern_label=exc.label)
-        return JSONResponse(
-            status_code=422,
-            content=_envelope(
-                code="OUTBOUND_CONTENT_BLOCKED",
-                message="Xabar tarkibida maxfiy kalit/tokenga o'xshash matn aniqlandi — xabar yuborilmadi.",
-                trace_id=_trace_id(request),
-                retryable=False,
+        return _blocked_content_response(
+            request,
+            code="OUTBOUND_CONTENT_BLOCKED",
+            message="Xabar tarkibida maxfiy kalit/tokenga o'xshash matn aniqlandi — xabar yuborilmadi.",
+            log_event="ai_outbound_content_blocked",
+            pattern_label=exc.label,
+        )
+
+    @app.exception_handler(SensitiveContentBlockedError)
+    async def _sensitive_content_blocked(request: Request, exc: SensitiveContentBlockedError) -> JSONResponse:
+        # NFR-DATA-001c: never echo the matched text back — only the class
+        # it was classified into (C4), never the content that triggered it.
+        return _blocked_content_response(
+            request,
+            code="SENSITIVE_CONTENT_BLOCKED",
+            message=(
+                "Xabar tarkibida moliyaviy, tibbiy yoki huquqiy sezgir ma'lumot (C4) "
+                "aniqlandi — bu sinf ma'lumot tashqi AI providerga sukut bo'yicha yuborilmaydi."
             ),
+            log_event="ai_sensitive_content_blocked",
+            classification=exc.classification,
         )
 
     @app.exception_handler(DeepRequestCostCeilingExceededError)
@@ -350,6 +459,45 @@ def register_exception_handlers(app: FastAPI) -> None:
             content=_envelope(
                 code="DEEP_COST_CEILING_EXCEEDED",
                 message="Bu so'rov DEEP rejimning bitta so'rov uchun narx chegarasidan oshadi.",
+                trace_id=_trace_id(request),
+                retryable=False,
+            ),
+        )
+
+    @app.exception_handler(MessageNotFoundForRegenerationError)
+    async def _message_not_found_for_regeneration(
+        request: Request, exc: MessageNotFoundForRegenerationError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=404,
+            content=_envelope(
+                code="NOT_FOUND", message="Xabar topilmadi.", trace_id=_trace_id(request), retryable=False
+            ),
+        )
+
+    @app.exception_handler(CannotRegenerateNonUserMessageError)
+    async def _cannot_regenerate_non_user_message(
+        request: Request, exc: CannotRegenerateNonUserMessageError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content=_envelope(
+                code="CANNOT_REGENERATE_MESSAGE",
+                message="Faqat o'z xabaringizni tahrirlab, qayta generatsiya qilishingiz mumkin.",
+                trace_id=_trace_id(request),
+                retryable=False,
+            ),
+        )
+
+    @app.exception_handler(RegenerationTargetNotLatestError)
+    async def _regeneration_target_not_latest(
+        request: Request, exc: RegenerationTargetNotLatestError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=409,
+            content=_envelope(
+                code="REGENERATION_TARGET_NOT_LATEST",
+                message="Faqat suhbatdagi so'nggi xabarni qayta generatsiya qilish mumkin.",
                 trace_id=_trace_id(request),
                 retryable=False,
             ),

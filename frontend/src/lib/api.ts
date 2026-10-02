@@ -284,6 +284,53 @@ export function cancelTaskReminder(
   });
 }
 
+// FR-TASK-006: a link to an already-uploaded Knowledge document.
+// `broken` is the requirement's own acceptance criterion made concrete:
+// once the linked document is deleted, the link stays listed (never
+// silently dropped), just marked broken - `filename`/`content_type`/
+// `size_bytes` are null exactly then.
+export interface TaskAttachmentOut {
+  id: string;
+  document_id: string;
+  attached_by: string;
+  created_at: string;
+  broken: boolean;
+  filename: string | null;
+  content_type: string | null;
+  size_bytes: number | null;
+}
+
+export function getTaskAttachments(
+  sessionId: string,
+  workspaceId: string,
+  taskId: string,
+): Promise<TaskAttachmentOut[]> {
+  return apiFetch(`/v1/workspaces/${workspaceId}/tasks/${taskId}/attachments`, sessionId);
+}
+
+export function attachTaskDocument(
+  sessionId: string,
+  workspaceId: string,
+  taskId: string,
+  documentId: string,
+): Promise<TaskAttachmentOut> {
+  return apiFetch(`/v1/workspaces/${workspaceId}/tasks/${taskId}/attachments`, sessionId, {
+    method: "POST",
+    body: JSON.stringify({ document_id: documentId }),
+  });
+}
+
+export function detachTaskDocument(
+  sessionId: string,
+  workspaceId: string,
+  taskId: string,
+  attachmentId: string,
+): Promise<void> {
+  return apiFetch(`/v1/workspaces/${workspaceId}/tasks/${taskId}/attachments/${attachmentId}`, sessionId, {
+    method: "DELETE",
+  });
+}
+
 // ---- /v1/workspaces/{id}/actions ----
 
 export type ActionStatus =
@@ -766,31 +813,26 @@ export type ConversationStreamEvent =
   | { kind: "done"; message: MessageOut | null }
   | { kind: "error"; code: string; message: string; trace_id: string; retryable: boolean };
 
-export async function* streamConversationMessage(
+// Shared tail of streamConversationMessage and regenerateConversationMessage
+// below — both just POST to a different URL with the same {content, mode}
+// body and consume the identical SSE framing; only the endpoint differs.
+async function* streamTurnsFromUrl(
+  url: string,
   sessionId: string,
-  workspaceId: string,
-  conversationId: string,
   content: string,
-  mode: ChatMode = "STANDARD",
+  mode: ChatMode,
   signal?: AbortSignal,
 ): AsyncGenerator<ConversationStreamEvent> {
-  // FR-CONV-002: aborting this fetch (the caller's Cancel button) is
-  // what the backend's `Request.is_disconnected()` check
-  // (`api/conversations.py`) actually detects — there is no separate
-  // cancel endpoint; the HTTP connection itself is the cancellation
-  // signal, same as any other streaming-fetch cancellation.
-  const response = await fetch(
-    `${API_BASE_URL}/v1/workspaces/${workspaceId}/conversations/${conversationId}/messages`,
-    {
-      method: "POST",
-      headers: { ...authHeaders(sessionId), "Content-Type": "application/json" },
-      body: JSON.stringify({ content, mode }),
-      signal,
-    },
-  );
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { ...authHeaders(sessionId), "Content-Type": "application/json" },
+    body: JSON.stringify({ content, mode }),
+    signal,
+  });
 
   if (!response.ok) {
-    // Pre-stream failure (budget/capability/provider error on round 0) —
+    // Pre-stream failure (budget/capability/provider error on round 0, or
+    // a validation error like FR-CONV-007's "not the latest message") —
     // a normal JSON error body, same shape as every other endpoint.
     await throwApiError(response);
   }
@@ -817,6 +859,61 @@ export async function* streamConversationMessage(
       frameEnd = buffer.indexOf("\n\n");
     }
   }
+}
+
+// The one endpoint family that isn't plain request/response JSON: the
+// backend replies over SSE (`text/event-stream`) because a turn can take
+// several tool-call rounds (see backend/src/doda/api/conversations.py's own
+// docstring). `fetch()` + a manual ReadableStream reader is the only way
+// to consume a streaming POST body from the browser — EventSource only
+// supports GET. Event names match the backend's `_sse_frame`/TurnChunk
+// kinds exactly: "text"/"tool_status" carry `{text}`, "done" carries
+// `{message}` (the persisted final assistant Message, or null if the
+// turn ended without producing one — e.g. a write-tool call), "error" is
+// the mid-stream failure frame (`api/conversations.py`'s `_error_frame`).
+export function streamConversationMessage(
+  sessionId: string,
+  workspaceId: string,
+  conversationId: string,
+  content: string,
+  mode: ChatMode = "STANDARD",
+  signal?: AbortSignal,
+): AsyncGenerator<ConversationStreamEvent> {
+  // FR-CONV-002: aborting this fetch (the caller's Cancel button) is
+  // what the backend's `Request.is_disconnected()` check
+  // (`api/conversations.py`) actually detects — there is no separate
+  // cancel endpoint; the HTTP connection itself is the cancellation
+  // signal, same as any other streaming-fetch cancellation.
+  return streamTurnsFromUrl(
+    `${API_BASE_URL}/v1/workspaces/${workspaceId}/conversations/${conversationId}/messages`,
+    sessionId,
+    content,
+    mode,
+    signal,
+  );
+}
+
+// FR-CONV-007: edit the conversation's own latest USER message and
+// regenerate the response to it. `messageId` must be that latest message
+// (backend-enforced — `REGENERATION_TARGET_NOT_LATEST`, a 409, if not);
+// the original message/response are never deleted, only excluded from
+// the NEW turn's own context.
+export function regenerateConversationMessage(
+  sessionId: string,
+  workspaceId: string,
+  conversationId: string,
+  messageId: string,
+  content: string,
+  mode: ChatMode = "STANDARD",
+  signal?: AbortSignal,
+): AsyncGenerator<ConversationStreamEvent> {
+  return streamTurnsFromUrl(
+    `${API_BASE_URL}/v1/workspaces/${workspaceId}/conversations/${conversationId}/messages/${messageId}/regenerate`,
+    sessionId,
+    content,
+    mode,
+    signal,
+  );
 }
 
 // ---- AI: /v1/customers/{id}/ai-providers, /ai-fallback — ADR-009's settings gap ----
@@ -972,6 +1069,35 @@ export function getAiBudgetStatus(sessionId: string, customerId: string): Promis
   return apiFetch(`/v1/customers/${customerId}/ai-budget`, sessionId);
 }
 
+// FR-ADM-005: "AI byudjeti va limitlarni belgilash" — until this existed,
+// the soft/hard caps above were a single, fixed, deployment-wide value
+// nobody could change per customer. CustomerOwner-only to set/clear;
+// CustomerOwner/Auditor may view (same as getAiBudgetStatus).
+export interface AiBudgetLimitsOut {
+  soft_cap_usd: number | null;
+  hard_cap_usd: number | null;
+}
+
+export function getAiBudgetLimits(sessionId: string, customerId: string): Promise<AiBudgetLimitsOut> {
+  return apiFetch(`/v1/customers/${customerId}/ai-budget-limits`, sessionId);
+}
+
+export function setAiBudgetLimits(
+  sessionId: string,
+  customerId: string,
+  softCapUsd: number,
+  hardCapUsd: number,
+): Promise<AiBudgetLimitsOut> {
+  return apiFetch(`/v1/customers/${customerId}/ai-budget-limits`, sessionId, {
+    method: "PUT",
+    body: JSON.stringify({ soft_cap_usd: softCapUsd, hard_cap_usd: hardCapUsd }),
+  });
+}
+
+export function clearAiBudgetLimits(sessionId: string, customerId: string): Promise<void> {
+  return apiFetch(`/v1/customers/${customerId}/ai-budget-limits`, sessionId, { method: "DELETE" });
+}
+
 // NFR-COST-001's breakdown half — the total above shows one number; this
 // shows where it went, per workspace/provider/model. Same auditorium
 // (CustomerOwner/Auditor), same "swallow 403 like an optional section" rule.
@@ -988,19 +1114,85 @@ export function getAiUsageReport(sessionId: string, customerId: string): Promise
   return apiFetch(`/v1/customers/${customerId}/ai-usage-report`, sessionId);
 }
 
-// ---- browser-side download helper (FR-CTL-002 export, FR-AUD-005 evidence package) ----
+// ---- /v1/workspaces/{id}/documents — FR-KNW-001 file ingest ----
 
-// Shared by sessions/page.tsx's "export my data" and customers/[id]/page.tsx's
-// "export evidence package" — both fetched a JSON payload and immediately
-// saved it as a file with the identical Blob/createObjectURL/anchor-click/
-// revokeObjectURL sequence; consolidated here so a third caller doesn't
-// have to copy it a third time.
-export function downloadJsonFile(filename: string, data: unknown): void {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+export interface DocumentOut {
+  id: string;
+  workspace_id: string;
+  uploader_id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  sha256: string;
+  created_at: string;
+}
+
+// Not routed through apiFetch: apiFetch always sets Content-Type:
+// application/json when a body is present, which would strip the
+// multipart boundary the browser needs to set itself for a FormData body.
+export async function uploadDocument(
+  sessionId: string,
+  workspaceId: string,
+  file: File,
+): Promise<DocumentOut> {
+  const body = new FormData();
+  body.append("file", file);
+  const response = await fetch(`${API_BASE_URL}/v1/workspaces/${workspaceId}/documents`, {
+    method: "POST",
+    headers: authHeaders(sessionId),
+    body,
+  });
+  if (!response.ok) {
+    await throwApiError(response);
+  }
+  return (await response.json()) as DocumentOut;
+}
+
+export function listDocuments(sessionId: string, workspaceId: string): Promise<DocumentOut[]> {
+  return apiFetch(`/v1/workspaces/${workspaceId}/documents`, sessionId);
+}
+
+export function deleteDocument(sessionId: string, workspaceId: string, documentId: string): Promise<void> {
+  return apiFetch(`/v1/workspaces/${workspaceId}/documents/${documentId}`, sessionId, { method: "DELETE" });
+}
+
+// ---- browser-side download helper (FR-CTL-002 export, FR-AUD-005 evidence
+// package, FR-KNW-001 file download) ----
+
+// Shared by sessions/page.tsx's "export my data", customers/[id]/page.tsx's
+// "export evidence package", and downloadDocument below — all three save a
+// Blob under a given filename via the same anchor-click sequence; only the
+// Blob's origin (JSON payload vs. raw fetched bytes) differs per caller.
+function triggerBlobDownload(filename: string, blob: Blob): void {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
   link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+// Fetches the raw bytes and immediately saves them under the document's
+// own filename — same browser-download shape as downloadJsonFile below,
+// but the payload here is arbitrary binary content, not JSON.
+export async function downloadDocument(
+  sessionId: string,
+  workspaceId: string,
+  documentId: string,
+  filename: string,
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL}/v1/workspaces/${workspaceId}/documents/${documentId}/content`,
+    { headers: authHeaders(sessionId) },
+  );
+  if (!response.ok) {
+    await throwApiError(response);
+  }
+  const blob = await response.blob();
+  triggerBlobDownload(filename, blob);
+}
+
+export function downloadJsonFile(filename: string, data: unknown): void {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  triggerBlobDownload(filename, blob);
 }

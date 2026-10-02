@@ -39,13 +39,17 @@ from doda.ai.types import (
     ToolSpec,
 )
 from doda.application import ai_budget_service, ai_provider_settings_service
-from doda.application.workspace_service import create_workspace
+from doda.application.session_service import create_session
+from doda.application.workspace_service import add_workspace_member, create_workspace
 from doda.config import Settings
 from doda.db import tenant_scoped_session
 from doda.domain.ai_usage.models import AIBudgetLedger, AIUsageEvent, UsageEventStatus
 from doda.domain.conversation.models import Conversation, Message, MessageRole
+from doda.domain.customer.models import CustomerMembership
+from doda.domain.identity.models import ActorKind, AuthStrength, User
+from doda.domain.workspace.models import Workspace
 from doda.main import app
-from tests.integration.conftest import seed_workspace_member
+from tests.integration.conftest import SeededMember, seed_workspace_member
 
 
 @pytest.fixture
@@ -67,6 +71,20 @@ def _parse_sse(body: str) -> list[tuple[str, dict]]:
         event_line, data_line = block.split("\n", 1)
         events.append((event_line.removeprefix("event: "), json.loads(data_line.removeprefix("data: "))))
     return events
+
+
+async def _create_conversation(client: AsyncClient, member: SeededMember) -> tuple[str, str]:
+    """Returns `(conversation_id, base_url)` — the FR-CONV-007 regenerate
+    tests below all need a fresh conversation before exercising edit/
+    regenerate on it, and none of them care about anything else from the
+    create response."""
+    create = await client.post(
+        f"/v1/workspaces/{member.workspace_id}/conversations",
+        json={},
+        headers=_auth_headers(member.session_id),
+    )
+    conversation_id = create.json()["id"]
+    return conversation_id, f"/v1/workspaces/{member.workspace_id}/conversations/{conversation_id}"
 
 
 async def _post_message(
@@ -888,6 +906,71 @@ async def test_a_read_tool_call_with_invalid_arguments_feeds_back_a_tool_error_i
     assert listed.json()[2]["content"].startswith("Tool error:")
 
 
+async def test_a_call_to_an_unregistered_tool_is_rejected_and_audited(
+    client: AsyncClient, db_available: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FR-ACT-001's own acceptance criterion: a call to a tool NOT in the
+    registry must be rejected AND audited. `delete_all_customer_data` is
+    in neither `_READ_TOOL_ARGS` nor `_WRITE_TOOL_ARGS` — before this was
+    fixed, such a call fell out of both `is_read_tool`/`is_write_tool`
+    filters in conversation_service.py and was silently dropped: no
+    tool-result message, no audit event, and the next round's history
+    would carry an unanswered tool_call."""
+    gateway = _ScriptedGateway(
+        [
+            [
+                ToolCallReady(
+                    call=ToolCallRequest(call_id="c1", name="delete_all_customer_data", arguments_json="{}")
+                ),
+                Completed(usage=GatewayUsage(input_tokens=1, output_tokens=1), finish_reason="tool_calls"),
+            ],
+            [
+                TextDelta(text="bunday vosita mavjud emas"),
+                Completed(usage=GatewayUsage(input_tokens=1, output_tokens=1), finish_reason="stop"),
+            ],
+        ]
+    )
+    monkeypatch.setattr(
+        "doda.application.conversation_service.get_gateway", lambda provider, settings: gateway
+    )
+
+    member = await seed_workspace_member()
+    create = await client.post(
+        f"/v1/workspaces/{member.workspace_id}/conversations",
+        json={},
+        headers=_auth_headers(member.session_id),
+    )
+    conversation_id = create.json()["id"]
+
+    post = await _post_message(
+        client,
+        f"/v1/workspaces/{member.workspace_id}/conversations/{conversation_id}/messages",
+        headers=_auth_headers(member.session_id),
+        content="mening barcha ma'lumotlarimni o'chir",
+    )
+    assert post.status_code == 200
+    # The turn still completed normally on round 2 — the unregistered
+    # call never aborted it and never looped forever.
+    assert gateway.calls == 2
+
+    listed = await client.get(
+        f"/v1/workspaces/{member.workspace_id}/conversations/{conversation_id}/messages",
+        headers=_auth_headers(member.session_id),
+    )
+    roles = [m["role"] for m in listed.json()]
+    assert roles == ["USER", "ASSISTANT", "TOOL", "ASSISTANT"]
+    assert listed.json()[2]["content"] == "Tool error: 'delete_all_customer_data' is not a registered tool."
+
+    audit = await client.get(
+        f"/v1/workspaces/{member.workspace_id}/audit?event_type=ai_tool.unregistered_call_rejected.v1",
+        headers=_auth_headers(member.session_id),
+    )
+    assert audit.status_code == 200
+    events = audit.json()
+    assert len(events) == 1
+    assert events[0]["safe_metadata"] == {"tool_name": "delete_all_customer_data"}
+
+
 async def test_a_structured_output_event_becomes_the_final_messages_content(
     client: AsyncClient, db_available: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -983,6 +1066,92 @@ async def test_a_write_tool_call_ends_the_turn_and_creates_a_real_pending_action
     assert len(action_list) == 1
     assert action_list[0]["tool_name"] == "telegram.send_message"
     assert action_list[0]["status"] == "AWAITING_APPROVAL"
+
+
+async def test_a_service_actor_chatting_still_gets_its_r2_risk_cap_enforced(
+    client: AsyncClient, db_available: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FR-AUTH-009, 15th security-review pass: `stream_message` reaching a
+    write tool call via `ai_tools.propose_write_tool_action` is a SECOND
+    call site into `action_service.propose_action`, independent of the
+    one in api/actions.py — the review that added FR-AUTH-009's R2 cap
+    only wired `actor_kind` through the direct
+    `POST /v1/workspaces/{id}/actions` route, leaving this one silently
+    defaulting to HUMAN. A Service Actor added to a workspace as an
+    ordinary member (a plausible real setup — "let this bot participate
+    in this workspace's chat") could otherwise get an R3 `telegram.
+    send_message` all the way to AWAITING_APPROVAL through chat alone,
+    exactly what 2.2's role table says its own max risk level (R2)
+    forbids.
+    """
+    gateway = _ScriptedGateway(
+        [
+            [
+                ToolCallReady(
+                    call=ToolCallRequest(
+                        call_id="c1",
+                        name="telegram_send_message",
+                        arguments_json=json.dumps({"chat_id": "123", "text": "salom"}),
+                    )
+                ),
+                Completed(usage=GatewayUsage(input_tokens=1, output_tokens=1), finish_reason="tool_calls"),
+            ]
+        ]
+    )
+    monkeypatch.setattr(
+        "doda.application.conversation_service.get_gateway", lambda provider, settings: gateway
+    )
+
+    owner = await seed_workspace_member(customer_role="customer_owner")
+
+    async with tenant_scoped_session(owner.customer_id) as db:
+        machine_user = User(oidc_subject_hash=str(uuid.uuid4()), display_name="ci-bot")
+        db.add(machine_user)
+        await db.flush()
+
+        machine_membership = CustomerMembership(
+            customer_id=owner.customer_id, user_id=machine_user.id, role="member"
+        )
+        db.add(machine_membership)
+        await db.flush()
+
+        workspace = await db.get(Workspace, owner.workspace_id)
+        assert workspace is not None
+        await add_workspace_member(
+            db,
+            workspace=workspace,
+            customer_membership=machine_membership,
+            role="member",
+            actor_id=f"user:{owner.user_id}",
+        )
+
+        service_session = await create_session(
+            db, user_id=machine_user.id, auth_strength=AuthStrength.AAL1, actor_kind=ActorKind.SERVICE
+        )
+
+    create = await client.post(
+        f"/v1/workspaces/{owner.workspace_id}/conversations",
+        json={},
+        headers=_auth_headers(service_session.id),
+    )
+    assert create.status_code == 200, create.text
+    conversation_id = create.json()["id"]
+
+    post = await _post_message(
+        client,
+        f"/v1/workspaces/{owner.workspace_id}/conversations/{conversation_id}/messages",
+        headers=_auth_headers(service_session.id),
+        content="telegramga xabar yubor",
+    )
+    assert post.status_code == 403
+    assert post.json()["code"] == "SERVICE_ACTOR_RISK_LEVEL_EXCEEDED"
+
+    # No Action was left behind either — the rejection happens before
+    # even a DRAFT row is created (propose_action's own ordering).
+    actions = await client.get(
+        f"/v1/workspaces/{owner.workspace_id}/actions", headers=_auth_headers(owner.session_id)
+    )
+    assert actions.json() == []
 
 
 async def test_exhausting_every_tool_round_ends_as_an_explicit_incomplete_turn_not_a_silent_success(
@@ -1336,6 +1505,118 @@ async def test_a_message_containing_a_live_looking_api_key_is_blocked_before_any
     assert listed.json() == []  # the message was never persisted either
 
 
+async def test_a_message_containing_c4_sensitive_data_is_blocked_before_any_provider_call(
+    client: AsyncClient, db_available: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NFR-DATA-001c: TRD 13.2's C4 class (finance/medical/legal) is
+    refused by default (OD-003) — same "before any provider call, before
+    the message is even persisted" placement as the OD-003 secret guard
+    just above, proven the same way: the gateway must never be reached."""
+    called = False
+
+    async def _never_called(*args: object, **kwargs: object) -> typing.AsyncIterator[GatewayEvent]:
+        nonlocal called
+        called = True
+        if False:
+            yield  # pragma: no cover
+        raise AssertionError("must never call the provider once C4-sensitive content was detected")
+
+    fake_gateway = type("_Unreachable", (), {"stream_chat": staticmethod(_never_called)})()
+    monkeypatch.setattr(
+        "doda.application.conversation_service.get_gateway", lambda provider, settings: fake_gateway
+    )
+
+    member = await seed_workspace_member()
+    create = await client.post(
+        f"/v1/workspaces/{member.workspace_id}/conversations",
+        json={},
+        headers=_auth_headers(member.session_id),
+    )
+    conversation_id = create.json()["id"]
+
+    post = await _post_message(
+        client,
+        f"/v1/workspaces/{member.workspace_id}/conversations/{conversation_id}/messages",
+        headers=_auth_headers(member.session_id),
+        content="Bemorning diagnozi bilan tanishtiring",
+    )
+    assert post.status_code == 422
+    assert post.json()["code"] == "SENSITIVE_CONTENT_BLOCKED"
+    assert called is False
+
+    listed = await client.get(
+        f"/v1/workspaces/{member.workspace_id}/conversations/{conversation_id}/messages",
+        headers=_auth_headers(member.session_id),
+    )
+    assert listed.json() == []  # the message was never persisted either
+
+
+async def test_a_normal_turns_data_classification_is_recorded_on_its_own_audit_event(
+    client: AsyncClient, db_available: bool
+) -> None:
+    """NFR-DATA-001b: "har bir tashqi AI so'rovi uchun yuborilgan
+    ma'lumot sinfi telemetriyada yoziladi" — proven end to end (the pure
+    classification logic itself is tests/unit/test_data_classification.py's
+    job), including that the event fires even against `NullModelGateway`
+    (no real provider configured in this test environment) — the point is
+    that an external-request *attempt* happened, not that it reached a
+    real provider."""
+    member = await seed_workspace_member()
+    create = await client.post(
+        f"/v1/workspaces/{member.workspace_id}/conversations",
+        json={},
+        headers=_auth_headers(member.session_id),
+    )
+    conversation_id = create.json()["id"]
+
+    post = await _post_message(
+        client,
+        f"/v1/workspaces/{member.workspace_id}/conversations/{conversation_id}/messages",
+        headers=_auth_headers(member.session_id),
+        content="Salom, DODA!",
+    )
+    assert post.status_code == 200
+
+    audit = await client.get(
+        f"/v1/workspaces/{member.workspace_id}/audit?event_type=ai.gateway_call.v1",
+        headers=_auth_headers(member.session_id),
+    )
+    assert audit.status_code == 200
+    events = audit.json()
+    assert len(events) == 1
+    metadata = events[0]["safe_metadata"]
+    assert metadata["data_classification"] == "C2"
+    assert metadata["mode"] == "STANDARD"
+    assert metadata["provider"] in {"OPENAI", "GEMINI", "CLAUDE"}
+    assert isinstance(metadata["model"], str) and metadata["model"]
+
+
+async def test_a_turns_c3_personal_data_is_recorded_not_silently_downgraded_to_c2(
+    client: AsyncClient, db_available: bool
+) -> None:
+    member = await seed_workspace_member()
+    create = await client.post(
+        f"/v1/workspaces/{member.workspace_id}/conversations",
+        json={},
+        headers=_auth_headers(member.session_id),
+    )
+    conversation_id = create.json()["id"]
+
+    post = await _post_message(
+        client,
+        f"/v1/workspaces/{member.workspace_id}/conversations/{conversation_id}/messages",
+        headers=_auth_headers(member.session_id),
+        content="Mening kontaktim: ali@example.com",
+    )
+    assert post.status_code == 200
+
+    audit = await client.get(
+        f"/v1/workspaces/{member.workspace_id}/audit?event_type=ai.gateway_call.v1",
+        headers=_auth_headers(member.session_id),
+    )
+    assert audit.json()[0]["safe_metadata"]["data_classification"] == "C3"
+
+
 async def test_a_customers_hard_budget_cap_refuses_a_turn_with_a_clean_402_before_any_provider_call(
     client: AsyncClient, db_available: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1671,3 +1952,148 @@ async def test_switching_mid_conversation_replays_prior_tool_call_history_to_the
     assert any(t.tool_calls and t.tool_calls[0].name == "list_my_open_tasks" for t in replayed)
     assert any(t.role is ChatRole.TOOL for t in replayed)
     assert replayed[-1].content == "davom ettiring"
+
+
+async def test_regenerating_the_latest_message_creates_new_rows_and_keeps_the_old_ones(
+    client: AsyncClient, db_available: bool
+) -> None:
+    """FR-CONV-007's own acceptance criterion, read literally: a new turn
+    (hence a new trace_id — `X-Trace-Id` is minted fresh per HTTP request,
+    the same NFR-OBS-001 mechanism `propose_action` uses) is produced, and
+    neither the original USER message nor its original ASSISTANT response
+    is deleted."""
+    member = await seed_workspace_member()
+    _, base_url = await _create_conversation(client, member)
+
+    original = await _post_message(
+        client, f"{base_url}/messages", headers=_auth_headers(member.session_id), content="salom"
+    )
+    assert original.status_code == 200
+    original_trace_id = original.headers["X-Trace-Id"]
+
+    before = await client.get(f"{base_url}/messages", headers=_auth_headers(member.session_id))
+    before_rows = before.json()
+    assert [m["role"] for m in before_rows] == ["USER", "ASSISTANT"]
+    original_user_id = before_rows[0]["id"]
+
+    regenerate = await _post_message(
+        client,
+        f"{base_url}/messages/{original_user_id}/regenerate",
+        headers=_auth_headers(member.session_id),
+        content="tahrirlangan salom",
+    )
+    assert regenerate.status_code == 200
+    assert regenerate.headers["X-Trace-Id"] != original_trace_id
+
+    after = await client.get(f"{base_url}/messages", headers=_auth_headers(member.session_id))
+    after_rows = after.json()
+    # Both the original pair AND the new pair exist — nothing was deleted.
+    assert [m["role"] for m in after_rows] == ["USER", "ASSISTANT", "USER", "ASSISTANT"]
+    assert after_rows[0]["id"] == original_user_id
+    assert after_rows[0]["content"] == "salom"
+    assert after_rows[2]["content"] == "tahrirlangan salom"
+
+
+async def test_regeneration_excludes_the_edited_away_turn_from_the_new_historys_context(
+    client: AsyncClient, db_available: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stronger claim behind "edit": the model generating the
+    regenerated response must never SEE the stale original message or its
+    stale original response in its context, even though neither row was
+    deleted from storage (proven separately above)."""
+    gateway = _RecordingGateway(reply_text="ikkinchi javob")
+    monkeypatch.setattr(
+        "doda.application.conversation_service.get_gateway", lambda provider, settings: gateway
+    )
+
+    member = await seed_workspace_member()
+    _, base_url = await _create_conversation(client, member)
+
+    original = await _post_message(
+        client,
+        f"{base_url}/messages",
+        headers=_auth_headers(member.session_id),
+        content="MAXFIY ESKI XABAR",
+    )
+    assert original.status_code == 200
+
+    before = await client.get(f"{base_url}/messages", headers=_auth_headers(member.session_id))
+    original_user_id = before.json()[0]["id"]
+
+    regenerate = await _post_message(
+        client,
+        f"{base_url}/messages/{original_user_id}/regenerate",
+        headers=_auth_headers(member.session_id),
+        content="yangi tahrirlangan xabar",
+    )
+    assert regenerate.status_code == 200
+
+    # gateway's first call was the ORIGINAL turn (before regeneration);
+    # its second call is the regenerated turn — that is the one whose
+    # history must be clean of the edited-away content.
+    assert len(gateway.received_histories) == 2
+    regenerated_history = gateway.received_histories[1]
+    assert all("MAXFIY ESKI XABAR" not in t.content for t in regenerated_history)
+    assert regenerated_history[-1].content == "yangi tahrirlangan xabar"
+
+
+async def test_regenerating_a_non_latest_user_message_is_rejected(
+    client: AsyncClient, db_available: bool
+) -> None:
+    member = await seed_workspace_member()
+    _, base_url = await _create_conversation(client, member)
+
+    await _post_message(
+        client, f"{base_url}/messages", headers=_auth_headers(member.session_id), content="birinchi"
+    )
+    await _post_message(
+        client, f"{base_url}/messages", headers=_auth_headers(member.session_id), content="ikkinchi"
+    )
+    rows = (await client.get(f"{base_url}/messages", headers=_auth_headers(member.session_id))).json()
+    first_user_message_id = next(m["id"] for m in rows if m["role"] == "USER")
+
+    response = await client.post(
+        f"{base_url}/messages/{first_user_message_id}/regenerate",
+        json={"content": "kechikkan tahrir"},
+        headers=_auth_headers(member.session_id),
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "REGENERATION_TARGET_NOT_LATEST"
+
+
+async def test_regenerating_an_assistant_message_is_rejected(client: AsyncClient, db_available: bool) -> None:
+    member = await seed_workspace_member()
+    _, base_url = await _create_conversation(client, member)
+
+    await _post_message(
+        client, f"{base_url}/messages", headers=_auth_headers(member.session_id), content="salom"
+    )
+    rows = (await client.get(f"{base_url}/messages", headers=_auth_headers(member.session_id))).json()
+    assistant_message_id = next(m["id"] for m in rows if m["role"] == "ASSISTANT")
+
+    response = await client.post(
+        f"{base_url}/messages/{assistant_message_id}/regenerate",
+        json={"content": "boshqa narsa"},
+        headers=_auth_headers(member.session_id),
+    )
+    assert response.status_code == 422
+    assert response.json()["code"] == "CANNOT_REGENERATE_MESSAGE"
+
+
+async def test_regenerating_an_unknown_message_id_is_404(client: AsyncClient, db_available: bool) -> None:
+    member = await seed_workspace_member()
+    _, base_url = await _create_conversation(client, member)
+
+    response = await client.post(
+        f"{base_url}/messages/{uuid.uuid4()}/regenerate",
+        json={"content": "nimadir"},
+        headers=_auth_headers(member.session_id),
+    )
+    assert response.status_code == 404
+
+    # The per-record cross-workspace tenancy guard (A's own valid
+    # conversation_id, naming B's message_id) is proven separately in
+    # test_cross_workspace_record_access.py, matching that file's own
+    # stated purpose and existing convention for this exact shape of
+    # check (see test_a_task_cannot_be_linked_to_a_sibling_workspaces_
+    # document for the identical pattern on a different domain).

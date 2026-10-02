@@ -93,13 +93,21 @@ someone runs that same check against the real service.
    repo → the branch this PR is on. Render reads `render.yaml` and shows
    a preview of what it's about to create (one Postgres database, two
    web services) — click **Apply**.
-3. Render will pause on two environment variables marked `sync: false`
+3. Render will pause on three environment variables marked `sync: false`
    in `render.yaml` and ask you to fill them in yourself, **directly in
    Render's dashboard** — never send these values to me:
    - `DODA_GOOGLE_OAUTH_CLIENT_SECRET` — the value you already have.
    - `DODA_TELEGRAM_BOT_TOKEN` — optional; leave blank if you'd rather
      wait for Redis to exist before the Telegram connector can do
      anything useful anyway.
+   - `DODA_GEMINI_API_KEY` — your Google AI Studio key, for chat to give
+     real answers instead of "no provider configured" on production.
+     **If `doda-backend` already exists** (this isn't a from-scratch
+     Blueprint apply), Render won't re-prompt for a newly-added
+     `sync: false` key on its own — add it yourself: the service's own
+     page → **Environment** tab → **Add Environment Variable** → key
+     `DODA_GEMINI_API_KEY`, your key as the value → save (this triggers
+     a redeploy automatically).
 4. **Google Cloud Console** — add an Authorized redirect URI for the
    `doda-backend` service Render just created. Render assigned this
    Blueprint's services suffixed hostnames rather than the clean
@@ -221,6 +229,89 @@ Caddy requests its Let's Encrypt certificate automatically on first
 request to `$DODA_DOMAIN` over port 80/443 — both need to be open on the
 server's firewall, and DNS needs to already resolve there for the ACME
 challenge to succeed.
+
+## Scheduled ops jobs (FR-TASK-005 / FR-ACT-005 / FR-AUD-004 / FR-ACT-009 / NFR-OBS-001)
+
+`backend/scripts/*_job.py` (plus the two stuck-action detectors) are real,
+tested application logic, but **nothing runs them on a schedule in either
+deployment shape above** — `docker-compose.prod.yml` has no cron-like
+service, and Render's free tier has no Cron Jobs feature. Two of these are
+not optional observability — they are the only thing that ever executes
+already-shipped behavior outside a dev/test session: `fire_due_reminders_
+job.py` is what turns a confirmed, due reminder into a real notification
+(FR-TASK-005), and `promote_due_action_retries_job.py` is what promotes a
+RETRYING action back to READY once its backoff elapses (FR-ACT-005).
+Without a scheduler, both exist fully built and tested but never actually
+fire against real data.
+
+`.github/workflows/ops-jobs.yml` is that scheduler — a GitHub Actions
+workflow (every 15 minutes for the two functional jobs above, daily for
+`verify_audit_chain_job.py`/the stuck-action detectors/
+`verify_trace_completeness_job.py`) that runs regardless of which
+deployment shape is live, since it only needs a reachable Postgres
+connection string, not access to whatever host the app itself runs on.
+**To enable it**: add a repository secret named `DODA_PROD_DATABASE_URL`
+(Settings → Secrets and variables → Actions) holding the production
+database's connection string — for the Render MVP, that is `doda-postgres`'s
+**External Database URL** from its own page in Render's dashboard (the
+*internal* one Render hands `doda-backend` via `fromDatabase:` in
+`render.yaml` is only reachable from inside Render's own network, not from
+a GitHub Actions runner). Until that secret exists, every scheduled run is
+a deliberate, clearly-logged no-op rather than a failing check — same
+"wait for a credential, never fabricate one" posture as the Telegram/
+Google OAuth secrets before they arrived. Not verified against a real
+Render Postgres from here (same network-policy block as everywhere else
+in this file) — if Render's external connection string needs an explicit
+`?sslmode=require` or similar that `config.py`'s own `postgres://` →
+`postgresql+asyncpg://` rewrite doesn't already handle, the workflow's
+first real run will say so plainly in its logs.
+
+### Bootstrapping the first real Customer
+
+A real Google login (FR-AUTH-001) can succeed on a fresh deployment while
+`/v1/me/workspaces` stays honestly empty — Customer creation is
+deliberately not public (2.3: self-serve signup is OUT OF SCOPE for v1).
+`.github/workflows/bootstrap-first-customer.yml` is the operator's one-off
+tool for this: trigger it manually (Actions tab → "Bootstrap first
+customer" → "Run workflow"), giving the exact Google account display name
+(as shown on Google's own account-chooser screen), a Customer name, and a
+Workspace name. It shares `DODA_PROD_DATABASE_URL` with the scheduled ops
+jobs above — nothing new to set up once that secret exists. The
+underlying script (`backend/scripts/bootstrap_first_customer.py`) refuses
+to run twice for the same user, so accidentally triggering it again is a
+loud no-op, not a duplicate Customer.
+
+## Uptime monitoring (NFR-REL-001)
+
+`.github/workflows/uptime-check.yml` pings the production health endpoint
+every ~10 minutes (retrying for about a minute to tolerate Render's own
+documented free-tier cold start, not just failing on the first miss), and
+`.github/workflows/uptime-monthly-report.yml` summarizes the last 30 days
+of those runs into a Job Summary once a month — the two halves of
+NFR-REL-001's own acceptance criterion ("Uptime monitoring, oylik
+hisobot").
+
+**To enable it**: add a repository **variable** (not a secret — a health
+URL isn't sensitive) named `DODA_PROD_HEALTH_URL` (Settings → Secrets and
+variables → Actions → Variables tab) holding the full health endpoint,
+e.g. `https://doda-backend-jv8e.onrender.com/v1/healthz` for the current
+Render MVP. Deliberately a variable rather than hardcoded in the
+workflow: this exact hostname has already changed once due to Render's
+own suffix-assignment behavior (see the "first attempt" note above), and
+a variable lets that be updated without touching code. Until it's set,
+every scheduled run is a clean, logged no-op, same posture as the ops
+jobs above.
+
+**Honest limits**: this is a ~10-minute-interval sample, not continuous
+monitoring — a short outage between two checks could be missed. The
+monthly "report" is a GitHub Actions Job Summary (computed from the
+run history GitHub already retains, via the default `GITHUB_TOKEN` —
+no new secret, no external storage), not a dedicated dashboard; that
+distinction matters because NFR-REL-002 (a stricter, separate
+requirement — error budget tracking with an automatic feature freeze
+once it's spent) is NOT what this closes and was not attempted here.
+Not verified against a live Render deployment from here, same
+network-policy block as everything else Render-specific in this file.
 
 ## Honest gaps this deployment shape does not close
 
