@@ -266,6 +266,21 @@ in this file) — if Render's external connection string needs an explicit
 `postgresql+asyncpg://` rewrite doesn't already handle, the workflow's
 first real run will say so plainly in its logs.
 
+### Bootstrapping the first real Customer
+
+A real Google login (FR-AUTH-001) can succeed on a fresh deployment while
+`/v1/me/workspaces` stays honestly empty — Customer creation is
+deliberately not public (2.3: self-serve signup is OUT OF SCOPE for v1).
+`.github/workflows/bootstrap-first-customer.yml` is the operator's one-off
+tool for this: trigger it manually (Actions tab → "Bootstrap first
+customer" → "Run workflow"), giving the exact Google account display name
+(as shown on Google's own account-chooser screen), a Customer name, and a
+Workspace name. It shares `DODA_PROD_DATABASE_URL` with the scheduled ops
+jobs above — nothing new to set up once that secret exists. The
+underlying script (`backend/scripts/bootstrap_first_customer.py`) refuses
+to run twice for the same user, so accidentally triggering it again is a
+loud no-op, not a duplicate Customer.
+
 ## Uptime monitoring (NFR-REL-001)
 
 `.github/workflows/uptime-check.yml` pings the production health endpoint
