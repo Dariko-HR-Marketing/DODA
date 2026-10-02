@@ -3,6 +3,9 @@ malicious/malformed upload is rejected. `validate_file` is pure and
 DB-free, so this is a plain unit test file, no fixtures needed.
 """
 
+import io
+import zipfile
+
 import pytest
 
 from doda.domain.knowledge.file_validation import (
@@ -19,6 +22,18 @@ from doda.domain.knowledge.file_validation import (
 _REAL_PDF_BYTES = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\nrest of a real pdf body"
 _REAL_PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 _WINDOWS_PE_BYTES = b"MZ\x90\x00\x03\x00\x00\x00rest of a windows executable"
+
+
+def _zip_bytes(members: dict[str, bytes]) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, content in members.items():
+            archive.writestr(name, content)
+    return buffer.getvalue()
+
+
+_REAL_DOCX_BYTES = _zip_bytes({"word/document.xml": b"<document/>", "[Content_Types].xml": b"<Types/>"})
+_REAL_XLSX_BYTES = _zip_bytes({"xl/workbook.xml": b"<workbook/>", "[Content_Types].xml": b"<Types/>"})
 
 
 def test_a_well_formed_pdf_is_accepted() -> None:
@@ -39,6 +54,67 @@ def test_a_well_formed_png_is_accepted() -> None:
         max_size_bytes=1_000_000,
     )
     assert content_type == "image/png"
+
+
+def test_a_well_formed_docx_is_accepted() -> None:
+    content_type = validate_file(
+        filename="report.docx",
+        declared_content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        data=_REAL_DOCX_BYTES,
+        max_size_bytes=1_000_000,
+    )
+    assert content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def test_a_well_formed_xlsx_is_accepted() -> None:
+    content_type = validate_file(
+        filename="budget.xlsx",
+        declared_content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        data=_REAL_XLSX_BYTES,
+        max_size_bytes=1_000_000,
+    )
+    assert content_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def test_a_generic_zip_archive_renamed_to_docx_is_rejected() -> None:
+    """A well-formed ZIP that is NOT an OOXML Word package (no
+    word/document.xml) — e.g. a renamed .epub, .jar, or an arbitrary
+    archive — used to pass validation because only the ZIP magic bytes
+    were checked, not the actual OOXML container contents."""
+    not_a_docx = _zip_bytes({"readme.txt": b"this is just a plain zip, not a Word document"})
+    with pytest.raises(FileContentMismatchError):
+        validate_file(
+            filename="report.docx",
+            declared_content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            data=not_a_docx,
+            max_size_bytes=1_000_000,
+        )
+
+
+def test_an_xlsx_renamed_from_a_docx_is_rejected() -> None:
+    """Both share the same ZIP magic bytes — only the internal member
+    (xl/workbook.xml vs word/document.xml) tells them apart."""
+    with pytest.raises(FileContentMismatchError):
+        validate_file(
+            filename="budget.xlsx",
+            declared_content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            data=_REAL_DOCX_BYTES,
+            max_size_bytes=1_000_000,
+        )
+
+
+def test_a_corrupted_zip_with_a_docx_extension_is_rejected() -> None:
+    """Valid ZIP magic bytes followed by garbage (truncated upload, or a
+    deliberately malformed archive) must not raise an unhandled
+    zipfile.BadZipFile out of validate_file — it is caught and converted
+    to the same FileContentMismatchError as every other mismatch."""
+    with pytest.raises(FileContentMismatchError):
+        validate_file(
+            filename="report.docx",
+            declared_content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            data=b"PK\x03\x04" + b"\x00" * 32,
+            max_size_bytes=1_000_000,
+        )
 
 
 def test_a_plain_utf8_text_file_is_accepted() -> None:

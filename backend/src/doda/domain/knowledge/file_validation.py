@@ -11,7 +11,9 @@ regardless of extension — the classic "renamed .exe" bypass this
 requirement's own acceptance criterion (a security test) targets.
 """
 
+import io
 import uuid
+import zipfile
 
 PDF = "application/pdf"
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -30,12 +32,20 @@ _EXTENSION_CONTENT_TYPES: dict[str, str] = {
     ".jpeg": JPEG,
 }
 
-# DOCX/XLSX are both OOXML-in-a-ZIP-container — a full OOXML content-type
-# check (parsing the central directory for "word/"/"xl/" entries) is a
-# real, known gap this v1 does not close; both accept any well-formed ZIP
-# signature. Documented in CLAUDE.md/docs/risk-register.md, not silently
-# assumed away.
+# DOCX/XLSX are both OOXML-in-a-ZIP-container. A ZIP magic-byte match
+# alone would accept ANY well-formed zip (a renamed .epub, .jar, or a
+# crafted archive with no Office content at all) under a .docx/.xlsx
+# extension — the central-directory check below (_OOXML_REQUIRED_MEMBER)
+# closes that by requiring the one file every real Word/Excel OOXML
+# package always contains. This still does not parse or validate the
+# XML content itself (e.g. OOXML's own macro/embedded-object risks) —
+# that remains a known, narrower gap than the one this closes.
 _ZIP_MAGIC = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
+
+_OOXML_REQUIRED_MEMBER: dict[str, str] = {
+    DOCX: "word/document.xml",
+    XLSX: "xl/workbook.xml",
+}
 
 _MAGIC_SIGNATURES: dict[str, tuple[bytes, ...]] = {
     PDF: (b"%PDF-",),
@@ -144,6 +154,18 @@ def validate_file(*, filename: str, declared_content_type: str, data: bytes, max
             raise FileContentMismatchError(
                 f"file content does not match the {expected_type!r} signature its extension declares"
             )
+        required_member = _OOXML_REQUIRED_MEMBER.get(expected_type)
+        if required_member is not None:
+            try:
+                with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                    has_member = required_member in archive.namelist()
+            except zipfile.BadZipFile:
+                has_member = False
+            if not has_member:
+                raise FileContentMismatchError(
+                    f"file is a zip archive but not a valid {expected_type!r} "
+                    f"package (missing {required_member!r})"
+                )
     else:
         # text/plain has no fixed magic byte — the file must at least
         # decode as UTF-8 text; a binary blob renamed to .txt fails this.

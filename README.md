@@ -681,7 +681,22 @@ qachon chaqirilmagan xato-konvertlari, hujjatlashtirilgan-lekin-hech-
 qachon-sinalmagan xavfsizlik nazoratlari) ochib berdi. To'liq, xronologik
 tafsilot: `CLAUDE.md`.
 
-**586 test, barchasi real Postgres(+Redis)'da; 17 E2E spec; umumiy
+**NFR-SEC-003'ning rutin dependency audit'i haqiqiy, CRITICAL CVE'ni
+topdi va yopdi** (`next` 16.3.4 → 16.3.8, RCE GHSA-vcvr-r3jv-pc5j) —
+`package.json`dagi aniq pin tufayli bu o'zi tuzalmasdi. Production Google
+OAuth client Google Cloud Console'da o'chirilgani ham aniqlandi (yangi
+credential Product Owner'dan kutilmoqda). **Oltita mustaqil ops-skript
+(FR-TASK-005 reminder, FR-ACT-005 retry, FR-AUD-004 audit-verify, va h.k.)
+hech qachon avtomatik ishga tushmaganligi topildi** — `.github/workflows/
+ops-jobs.yml` bilan GitHub Actions orqali rejalashtirildi (Render/sandbox
+tarmoq cheklovidan tashqari yagona chiqish yo'li); real ishga tushirishda
+18 ta haqiqiy, eskirgan reminder haqiqatda yoqib yuborildi — bo'shliq
+nazariy emas, haqiqiy ekani tasdiqlandi. **NFR-REL-001 (uptime monitoring +
+oylik hisobot)** xuddi shu usul bilan (`uptime-check.yml`/`uptime-monthly-
+report.yml`) qurildi. FR-KNW-001'ning DOCX/XLSX validatsiyasi endi faqat
+ZIP magic byte emas, haqiqiy OOXML konteyner tarkibini ham tekshiradi.
+
+**591 test, barchasi real Postgres(+Redis)'da; 17 E2E spec; umumiy
 backend qamrov 99%; `ruff`/`mypy` toza.**
 
 ## Ishga tushirish (local dev)

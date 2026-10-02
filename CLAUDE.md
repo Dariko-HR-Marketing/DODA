@@ -9030,3 +9030,49 @@ sintaktik jihatdan tasdiqlandi; `jq`/foiz hisoblash mantig'i qo'lda,
 sintetik `gh run list` JSON namunasi bilan (4 ta yozuv, 3 muvaffaqiyatli)
 tasdiqlanib, `75.00%` to'g'ri chiqishi ko'rsatildi; `bash -n` ikkala
 skriptning sintaksisini tasdiqladi.
+
+**FR-KNW-001'ning o'z kod bazasida aniq hujjatlashtirilgan bo'shlig'i
+yopildi: DOCX/XLSX validatsiyasi faqat ZIP magic byte'ni tekshirardi,
+haqiqiy OOXML tarkibini emas.** `file_validation.py`ning o'z izohi
+("to'liq kontent-tur tekshiruvi... ataylab QURILMADI — bu haqiqiy,
+hujjatlashtirilgan bo'shliq") buni ochiq qoldirgan edi — natijada
+istalgan to'g'ri shakldagi ZIP arxivi (masalan, nomi o'zgartirilgan
+`.epub`, `.jar`, yoki hech qanday Office kontentisiz oddiy arxiv)
+`.docx`/`.xlsx` kengaytmasi bilan validatsiyadan muvaffaqiyatli o'tardi —
+FR-KNW-001'ning o'z "malware validatsiyasi" acceptance mezoniga
+(executable/noto'g'ri kontentni rad etish) to'liq mos kelmasdi.
+
+Tuzatish: har ikkala OOXML format uchun haqiqiy Word/Excel paketida
+HAR DOIM mavjud bo'lgan ichki a'zoni (`word/document.xml` DOCX uchun,
+`xl/workbook.xml` XLSX uchun) `zipfile.ZipFile`ning markaziy katalogidan
+tekshiradigan `_OOXML_REQUIRED_MEMBER` qo'shildi — bu ZIP magic byte
+tekshiruvidan KEYIN, lekin boshqa tekshiruvlar bilan bir xil
+`FileContentMismatchError` orqali. Buzilgan/kesilgan ZIP (`zipfile.
+BadZipFile`) ham ushlanib, xuddi shu xato turiga aylantiriladi — xom
+exception API orqali sizib chiqmaydi. **Ataylab torroq qolgan narsa**:
+bu hamon OOXML'ning o'z XML kontentini (masalan, makro/embedded-object
+xavflari) tahlil qilmaydi — faqat konteyner strukturasi (kerakli a'zo
+mavjudligi) tekshiriladi, komment sifatida aniq yozilgan.
+
+Audit-zanjiri uslubida isbotlandi: `_OOXML_REQUIRED_MEMBER` tekshiruvini
+vaqtincha `if False and ...`ga aylantirib, uchta yangi test
+(`test_a_generic_zip_archive_renamed_to_docx_is_rejected`,
+`test_an_xlsx_renamed_from_a_docx_is_rejected`,
+`test_a_corrupted_zip_with_a_docx_extension_is_rejected`) aynan kutilgan
+tarzda (`DID NOT RAISE FileContentMismatchError`) muvaffaqiyatsiz
+bo'lishini ko'rsatdim, keyin faylni zaxira nusxadan tiklab (`diff` bilan
+0 farq tasdiqlab) qaytadan yashil ekanini ko'rsatdim. Ikkita qo'shimcha
+"baxtli yo'l" testi (`test_a_well_formed_docx_is_accepted`,
+`test_a_well_formed_xlsx_is_accepted`, real, qo'lda qurilgan minimal
+OOXML zip baytlari bilan — DOCX/XLSX uchun bu loyihada birinchi marta)
+ham qo'shildi, chunki bu ikki format uchun hech qachon hatto baxtli yo'l
+ham test qilinmagan edi.
+
+HTTP darajasida yangi handler kerak bo'lmadi — `FileContentMismatchError`
+allaqachon `FileValidationError`ning subklassi, `api/errors.py`ning
+mavjud bitta-konvert handler'i orqali 422 qaytaradi (executable-rad etish
+yo'li bilan bir xil, allaqachon HTTP orqali testlangan). Yangi E2E test
+ham qurilmadi — bu sof ichki validatsiya kuchaytirilishi, HTTP xulqi
+(422, Document qatori yaratilmaydi) aynan bir xil qoladi.
+
+591 test (586+5), barchasi real Postgres'da; `ruff`/`mypy` toza.
