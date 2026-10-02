@@ -203,6 +203,19 @@ class Settings(BaseSettings):
     # can't alone consume a big share of the whole month's budget.
     ai_deep_request_cost_ceiling_usd: float = 2.0
 
+    # OD-004: voice (STT/TTS) provider decision — Google Cloud
+    # Speech-to-Text/Text-to-Speech, Product Owner's explicit choice. The
+    # service-account key GCP issues for this is a JSON document, not a
+    # bare token, so it is stored here as the raw JSON text (SecretStr for
+    # the same "never logged" reason as every other credential field
+    # above) rather than a file path — a path would assume a writable,
+    # persistent filesystem at a known location, which this project's own
+    # deployments (this sandbox, Render) don't uniformly guarantee. None
+    # means "no real adapter yet": doda.voice.factory wires the Null*
+    # implementations in doda.voice.port for it in that case, same
+    # discipline as doda.ai.factory before a model-provider key exists.
+    google_cloud_speech_credentials_json: SecretStr | None = None
+
     @field_validator("cors_allowed_origins")
     @classmethod
     def _reject_wildcard_origin(cls, value: str) -> str:

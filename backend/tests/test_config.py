@@ -127,3 +127,18 @@ def test_google_oauth_client_secret_never_appears_in_the_settings_repr() -> None
     assert "not-secret-client-id" in repr(settings)
     assert settings.google_oauth_client_secret is not None
     assert settings.google_oauth_client_secret.get_secret_value() == "super-secret-oauth-client-secret"
+
+
+def test_google_cloud_speech_credentials_never_appear_in_the_settings_repr() -> None:
+    """Same guarantee as every other credential field above, for OD-004's
+    voice (STT/TTS) provider — a GCP service-account key is a JSON blob
+    rather than a bare token, but it is exactly as sensitive and gets the
+    same SecretStr treatment."""
+    fake_credentials_json = '{"type": "service_account", "private_key": "super-secret-gcp-key"}'
+    settings = Settings(
+        google_cloud_speech_credentials_json=fake_credentials_json  # type: ignore[call-arg]
+    )
+
+    assert "super-secret-gcp-key" not in repr(settings)
+    assert settings.google_cloud_speech_credentials_json is not None
+    assert settings.google_cloud_speech_credentials_json.get_secret_value() == fake_credentials_json
