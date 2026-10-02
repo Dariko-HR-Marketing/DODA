@@ -16,7 +16,7 @@ qondirmaydi — bu hujjat har bir ID'ni alohida, TRD'ning o'z matniga
 | FR-KNW-002 | — | **Qurildi** — Product Owner haqiqiy Gemini API kalitini taqdim etgandan keyin (bu hujjat yozilgan vaqtda ADR-008/009'ning "uchala provayder ham bloklangan" holati endi noto'g'ri — ADR-009'ning o'zi keyinroq yangilandi). Pastga qarang. |
 | FR-KNW-003 | — | **Qurildi** — keyword (ILIKE, per-word) + vector (cosine distance) + metadata filter (document_id), Reciprocal Rank Fusion bilan birlashtirilgan. Pastga qarang. |
 | FR-KNW-004 | C | 003'ning retrieval natijasisiz "manba"ning o'zi yo'q edi — endi 003 qurilgan, lekin FR-KNW-004'ning o'z qabul mezoni (citation UI/format) alohida, hali qurilmagan ish — 003 faqat uning ORQASIDAGI retrieval mexanizmini ta'minlaydi |
-| FR-KNW-005 | B (qisman) | O'zgarmadi — "Indeks"ning o'zi mavjud (002) — FK `ondelete="CASCADE"` orqali hujjat o'chirilganda chunk'lar ham avtomatik o'chadi |
+| FR-KNW-005 | — | **Qurildi** — mexanizmning o'zi (CASCADE + blob delete) 002/001 davridanoq bor edi, lekin TRD'ning o'z qabul mezoni ("retrieval 0 qaytaradi; blob mavjud emas") hech qachon shu aniq shaklda, end-to-end tekshirilmagan edi. Pastga qarang. |
 | FR-KNW-006 | C | 003 endi qurilgan, lekin "manba topilmasa ochiq ayt" (chat javobining o'zi) alohida ish — bugun `knowledge_search` tool'i "No matching documents found." deb aniq qaytaradi (model buni ko'radi), lekin modelning bu javobni QANDAY taqdim qilishi (masalan "bu savolga javob topa olmadim" deb ochiq aytishi) prompt-injection emas, modelning o'z javobi — tekshirilmagan |
 | FR-KNW-007 / FR-CTL-004 | C (qisman A) | "Preference" xotira turi allaqachon boshqa ID'lar ostida qurilgan; qolgan to'rt turi (Working/Episodic/Semantic/Sensitive) yangi PO qarori kerak |
 | FR-KNW-008 | C | Asinxron ingest+progress — 002'ning SINXRON versiyasi qurilgandan keyin ham, bu hamon alohida ish (job-queue infratuzilmasi, FR-KNW-002'ning o'z docstring'ida ochiq qoldirilgan) |
@@ -259,3 +259,36 @@ sandbox'ning `.env`i endi real kalitlar bilan CI'dan farq qilgani
 sababli ko'ringan, kelajakdagi tuzatish uchun qayd etilgan topilma —
 FR-KNW-003'ning o'z diff doirasidan tashqarida (minimal-diff qoidasi),
 shuning uchun bu safar tuzatilmadi.
+
+## FR-KNW-005: qurilgan holat (texnik tafsilot)
+
+Mexanizmning o'zi (hujjat o'chirilganda uning chunk'lari CASCADE orqali,
+blob'i esa `delete_document`ning o'z `storage.delete(...)` chaqiruvi
+orqali o'chishi) FR-KNW-001/002 qurilgandan beri bor edi — bu yangi kod
+emas. Yetishmagani TRD'ning o'z qabul mezonining AYNAN ikkala yarmini
+("retrieval 0 natija qaytaradi; blob mavjud emas") bitta end-to-end
+testda, to'g'ridan-to'g'ri HTTP orqali tekshirish edi: mavjud
+`test_deleting_a_document_cascades_to_its_chunks` faqat `DocumentChunk`
+qatorlarini to'g'ridan-to'g'ri DB so'rovi bilan tekshirar edi (SEARCH
+ENDPOINT'ning o'zi emas), va hech qanday test `delete_document`ning o'z
+`storage.delete(...)` chaqiruvi haqiqatda diskdan faylni o'chirishini
+tasdiqlamagan edi (mavjud `test_downloading_a_document_whose_stored_
+object_went_missing_is_a_clean_404` buning TESKARISINI — faylni qo'lda
+o'chirib, DB qatori qolgan holatni — sinaydi, `delete_document`ning
+o'zini emas).
+
+Yangi `test_deleting_a_document_makes_it_unsearchable_and_removes_its_
+blob` (`test_knowledge_api.py`) uchtasini ham bitta oqimda tekshiradi:
+hujjat yuklanadi (bitta blob yoziladi, `tmp_path.rglob`da tasdiqlanadi),
+`GET .../documents/search` uni topadi, `DELETE .../documents/{id}`
+chaqiriladi, keyin AYNAN SHU qidiruv endi bo'sh ro'yxat qaytarishi VA
+`tmp_path`da hech qanday fayl qolmaganligi tasdiqlanadi.
+
+Audit-zanjiri uslubida isbotlandi: `delete_document`ning o'z
+`storage.delete(document.storage_key)` chaqiruvini vaqtincha `pass`ga
+almashtirib, test aynan kutilgan tarzda (blob hamon diskda qolib)
+muvaffaqiyatsiz bo'lishini ko'rsatdim, keyin qaytarib (`git diff` bilan
+0 farq tasdiqlab) yashil ekanini ko'rsatdim. 647 test, barchasi real
+Postgres'da; `ruff`/`mypy src/doda`/`mypy scripts` toza. Kod o'zgarmadi
+(faqat yangi test) — mexanizmning o'zi allaqachon to'g'ri edi, endi
+TRD'ning o'z so'zlari bilan, to'liq isbotlangan.

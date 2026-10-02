@@ -9535,3 +9535,30 @@ pre-existing drift sababli) yashil ekani alohida-alohida tasdiqlandi.
 barchasi real Postgres'da; `ruff`/`mypy src/doda`/`mypy scripts/` toza;
 frontend `tsc --noEmit`/ESLint toza, production build muvaffaqiyatli;
 barcha 17 E2E spec (CI'ning haqiqiy, embedding-kalitisiz holatida) yashil.
+
+**FR-KNW-005 (O'chirish so'rovi — indeks, blob, cache va derived
+artifactlarga tarqaladi, Must) yopildi — mexanizmning o'zi emas, uning
+TRD'ning o'z so'zlari bilan to'liq, end-to-end isboti.** `docs/design-
+proposals/FR-KNW-memory-design-notes.md`ning o'zi bu ID'ni "B (qisman)"
+deb belgilagan edi — sabab mexanizm emas (CASCADE + blob delete 001/002
+davridanoq bor edi), balki qabul mezonining o'z ikkala yarmi ("retrieval
+0 natija qaytaradi; blob mavjud emas") hech qachon bitta end-to-end
+testda, to'g'ridan-to'g'ri HTTP orqali birlashtirilmagan edi. Mavjud
+`test_deleting_a_document_cascades_to_its_chunks` faqat `DocumentChunk`
+qatorlarini DB so'rovi bilan tekshirardi (SEARCH endpoint'ning o'zi
+emas); hech qanday test `delete_document`ning `storage.delete(...)`
+chaqiruvi haqiqatda diskdan faylni o'chirishini tasdiqlamagan edi.
+
+Yangi `test_deleting_a_document_makes_it_unsearchable_and_removes_its_
+blob` (`test_knowledge_api.py`) uchtasini bitta oqimda tekshiradi:
+hujjat yuklanadi → `GET .../documents/search` uni topadi → `DELETE
+.../documents/{id}` → AYNAN SHU qidiruv endi bo'sh ro'yxat qaytaradi VA
+`tmp_path`da hech qanday blob fayl qolmaydi. Audit-zanjiri uslubida
+isbotlandi: `delete_document`ning `storage.delete(document.storage_key)`
+chaqiruvini vaqtincha `pass`ga almashtirib, test aynan kutilgan tarzda
+(blob hamon diskda qolib) muvaffaqiyatsiz bo'lishini ko'rsatdim, keyin
+qaytarib (`git diff` bilan 0 farq tasdiqlab) yashil ekanini ko'rsatdim.
+
+Kod o'zgarmadi — mexanizmning o'zi allaqachon to'g'ri edi, faqat yangi
+test qo'shildi. 647 test, barchasi real Postgres'da; `ruff`/`mypy
+src/doda`/`mypy scripts/` toza.

@@ -485,3 +485,55 @@ async def test_search_finds_matching_content_and_the_document_id_filter_narrows_
     )
     assert filtered.status_code == 200
     assert {chunk["document_id"] for chunk in filtered.json()} == {document_a_id}
+
+
+async def test_deleting_a_document_makes_it_unsearchable_and_removes_its_blob(
+    client: AsyncClient,
+    db_available: bool,
+    small_chunk_settings: Settings,
+    fake_embedding: _FakeEmbeddingPort,
+    tmp_path,
+) -> None:
+    """FR-KNW-005's own acceptance criterion, both halves, over real
+    HTTP — a stronger proof than test_deleting_a_document_cascades_to_
+    its_chunks (which only checks the DB rows directly): (1) the SEARCH
+    ENDPOINT itself, not a direct query, finds nothing afterward, and
+    (2) the stored object is actually gone from disk, not merely
+    unreferenced by any row."""
+    member = await seed_workspace_member()
+    needle = "retention-policy-vq42"
+
+    upload = await client.post(
+        f"/v1/workspaces/{member.workspace_id}/documents",
+        files=_upload_files("policy.txt", "text/plain", f"the {needle} applies here".encode()),
+        headers=_auth_headers(member.session_id),
+    )
+    assert upload.status_code == 200
+    document_id = upload.json()["id"]
+
+    stored_files_before = [p for p in tmp_path.rglob("*") if p.is_file()]
+    assert len(stored_files_before) == 1  # the one blob this upload wrote
+
+    found_before = await client.get(
+        f"/v1/workspaces/{member.workspace_id}/documents/search",
+        params={"q": needle},
+        headers=_auth_headers(member.session_id),
+    )
+    assert found_before.status_code == 200
+    assert found_before.json() != []
+
+    delete = await client.delete(
+        f"/v1/workspaces/{member.workspace_id}/documents/{document_id}",
+        headers=_auth_headers(member.session_id),
+    )
+    assert delete.status_code == 204
+
+    found_after = await client.get(
+        f"/v1/workspaces/{member.workspace_id}/documents/search",
+        params={"q": needle},
+        headers=_auth_headers(member.session_id),
+    )
+    assert found_after.status_code == 200
+    assert found_after.json() == []
+
+    assert [p for p in tmp_path.rglob("*") if p.is_file()] == []
