@@ -39,6 +39,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from doda.ai.capabilities import assert_supports_tools
+from doda.ai.citation import CITATION_INSTRUCTION
 from doda.ai.data_classification import DataClassification, classify_outbound_content
 from doda.ai.errors import (
     ModelProviderError,
@@ -395,13 +396,19 @@ async def stream_message(
     effective_language = await resolve_effective_language(
         session, conversation, content, workspace_id=workspace_context.workspace_id
     )
-    # FR-KNW-006: the groundedness/honesty directive is unconditional —
-    # unlike the language directive above, it never falls back to "no
-    # instruction at all", since the honesty discipline it asks for
-    # applies whether or not this particular turn ends up calling
-    # knowledge_search.
+    # FR-KNW-004/006: the citation and groundedness/honesty directives
+    # are both unconditional — unlike the language directive above, they
+    # never fall back to "no instruction at all", since the discipline
+    # they ask for applies whether or not this particular turn ends up
+    # calling knowledge_search.
     instructions = " ".join(
-        part for part in (response_language_instruction(effective_language), GROUNDEDNESS_INSTRUCTION) if part
+        part
+        for part in (
+            response_language_instruction(effective_language),
+            GROUNDEDNESS_INSTRUCTION,
+            CITATION_INSTRUCTION,
+        )
+        if part
     )
 
     choice = await ai_preference_service.resolve_provider_choice(

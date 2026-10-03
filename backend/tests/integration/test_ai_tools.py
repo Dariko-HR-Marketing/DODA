@@ -210,6 +210,10 @@ async def test_knowledge_search_tool_finds_indexed_content(
         )
     assert needle in result
     assert str(document.id) in result
+    # FR-KNW-004: the exact locator shape CITATION_INSTRUCTION asks the
+    # model to copy back verbatim — document_id alone isn't enough to
+    # resolve to one specific chunk within a multi-chunk document.
+    assert f"[manba: document_id={document.id}, chunk=0]" in result
 
 
 async def test_proposing_a_write_tool_creates_an_r3_action_requiring_approval(db_available: bool) -> None:

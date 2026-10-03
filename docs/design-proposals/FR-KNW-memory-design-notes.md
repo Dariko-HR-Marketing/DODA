@@ -15,7 +15,7 @@ qondirmaydi — bu hujjat har bir ID'ni alohida, TRD'ning o'z matniga
 | FR-KNW-001 | — | **Qurildi** (avvalgi sessiyada) — fayl ingest, tur/hajm/malware validatsiyasi |
 | FR-KNW-002 | — | **Qurildi** — Product Owner haqiqiy Gemini API kalitini taqdim etgandan keyin (bu hujjat yozilgan vaqtda ADR-008/009'ning "uchala provayder ham bloklangan" holati endi noto'g'ri — ADR-009'ning o'zi keyinroq yangilandi). Pastga qarang. |
 | FR-KNW-003 | — | **Qurildi** — keyword (ILIKE, per-word) + vector (cosine distance) + metadata filter (document_id), Reciprocal Rank Fusion bilan birlashtirilgan. Pastga qarang. |
-| FR-KNW-004 | C | 003'ning retrieval natijasisiz "manba"ning o'zi yo'q edi — endi 003 qurilgan, lekin FR-KNW-004'ning o'z qabul mezoni (citation UI/format) alohida, hali qurilmagan ish — 003 faqat uning ORQASIDAGI retrieval mexanizmini ta'minlaydi |
+| FR-KNW-004 | — | **Qurildi** — `CITATION_INSTRUCTION` + knowledge_search'ning o'z "[manba: document_id=..., chunk=...]" locator formati, real Gemini'ga qarshi `citation_eval.py` bilan isbotlandi. Pastga qarang. |
 | FR-KNW-005 | — | **Qurildi** — mexanizmning o'zi (CASCADE + blob delete) 002/001 davridanoq bor edi, lekin TRD'ning o'z qabul mezoni ("retrieval 0 qaytaradi; blob mavjud emas") hech qachon shu aniq shaklda, end-to-end tekshirilmagan edi. Pastga qarang. |
 | FR-KNW-006 | — | **Qurildi** — unconditional `GROUNDEDNESS_INSTRUCTION` har bir burilishga qo'shiladi, real Gemini'ga qarshi uch stsenariyli eval bilan isbotlandi (`backend/scripts/groundedness_eval.py`). Pastga qarang. |
 | FR-KNW-007 / FR-CTL-004 | C (qisman A) | "Preference" xotira turi allaqachon boshqa ID'lar ostida qurilgan; qolgan to'rt turi (Working/Episodic/Semantic/Sensitive) yangi PO qarori kerak |
@@ -134,16 +134,13 @@ to'rttasi ham qurilganda bu paragrafning o'zi qaytib yangilanmay qolgan
 edi — yuqoridagi jadval to'g'ri, faqat shu paragraf eskirgan edi. Endi
 to'g'rilandi.
 
-To'qqizta FR-KNW ID'idan oltitasi (001, 002, 003, 005, 006, 009) qurilgan.
-Qolgan uchtasidan FR-KNW-004 (citation-required rejim) endi blokersiz —
-003'ning o'z retrieval mexanizmi (document_id + chunk lineage) allaqachon
-citation locator uchun kerakli ma'lumotni beradi, faqat UI/format qismi
-hali qurilmagan. FR-KNW-008 (asinxron ingest) alohida, job-queue
-infratuzilmasi talab qiladigan ish bo'lib qoladi. FR-KNW-007/FR-CTL-004
-(memory) — beshta turdan bittasi (Preference) allaqachon boshqa ID'lar
-ostida qondirilgan, qolgan to'rttasi (Working/Episodic/Semantic/Sensitive)
-yangi Product Owner qaroriga bog'liq (Sensitive consent modeli — eng
-muhimi).
+To'qqizta FR-KNW ID'idan ettitasi (001, 002, 003, 004, 005, 006, 009)
+qurilgan. Qolgan ikkitasidan FR-KNW-008 (asinxron ingest) alohida,
+job-queue infratuzilmasi talab qiladigan ish bo'lib qoladi. FR-KNW-007/
+FR-CTL-004 (memory) — beshta turdan bittasi (Preference) allaqachon
+boshqa ID'lar ostida qondirilgan, qolgan to'rttasi (Working/Episodic/
+Semantic/Sensitive) yangi Product Owner qaroriga bog'liq (Sensitive
+consent modeli — eng muhimi).
 
 ## FR-KNW-002: qurilgan holat (texnik tafsilot)
 
@@ -538,3 +535,76 @@ cross_workspace_record_access.py`), barchasi real Postgres'da; `ruff`/
 `mypy src/doda`/`mypy scripts` toza; frontend `tsc`/ESLint toza,
 production build muvaffaqiyatli. Migratsiya round-trip (0029→0030→
 0029→0030) qo'lda tekshirildi.
+
+## FR-KNW-004: qurilgan holat (texnik tafsilot)
+
+Qabul mezoni — "Groundedness eval >=90%; manbasiz claim flag qilinadi" —
+TRD'ning o'z EVAL-GRD-010'si FR-KNW-004'ni FR-KNW-006 bilan bir qatorda,
+"Ishonchli javob" ostida birgalikda ro'yxatlaydi. FR-KNW-006'ning o'zi
+qurilgandan (`GROUNDEDNESS_INSTRUCTION`) va uning qurilish jarayonida
+Gemini'ning ko'p bosqichli tool-chaqiruvi tuzatilgandan keyin,
+FR-KNW-004'ning o'zi ham sof prompt-engineering ish bo'lib qoldi — hech
+qanday yangi infratuzilma yoki Product Owner qarori kerak emas edi.
+
+`doda.ai.citation.CITATION_INSTRUCTION` — `GROUNDEDNESS_INSTRUCTION`
+bilan bir xil "bu PROMPT, kod-darajasidagi gate emas" falsafasi: modelga
+`knowledge_search` natijasidan olingan har bir da'voni darhol o'sha
+natijada ko'rsatilgan manba belgisini ANIQ ko'chirib qo'yishni so'raydi.
+Bu locator formati o'ylab topilgan emas — `ai_tools.dispatch_read_tool`'
+ning o'z `knowledge_search` filiali endi har bir qaytarilgan chunk'ga
+`[manba: document_id=..., chunk=...]` prefiksini qo'shadi (avval faqat
+`document_id` bor edi, `chunk_index` yo'q edi — FR-KNW-002'ning o'z
+source-lineage maydonlaridan biri, bitta hujjat ichidagi bitta aniq
+chunk'ga ishora qilish uchun zarur). Model shu aniq matnni o'zgartirmasdan
+qaytarishi so'raladi — bu citation'ning haqiqiy, bitta DocumentChunk
+qatoriga qaytarib bog'lanadigan (traceable) bo'lib qolishini
+ta'minlaydi, erkin matnli "hujjatga ko'ra..." iborasiga aylanib
+ketishini emas.
+
+`CITATION_INSTRUCTION` `GROUNDEDNESS_INSTRUCTION`bilan bir qatorda,
+`stream_message`'ning `instructions`ga SHARTSIZ qo'shildi (bu burilish
+`knowledge_search`ni chaqiradimi yoki yo'qmi — bilib bo'lmaydi, model
+javob berishdan OLDIN). Mavjud yagona "instructions == [...]" testi
+yangilandi — endi ikkala ko'rsatma ham birga kutiladi.
+
+Audit-zanjiri uslubida isbotlandi: `ai_tools.py`ning yangi locator
+formatini vaqtincha eski (faqat `document_id`, `chunk` yo'q) formatga
+qaytarib, yangilangan `test_knowledge_search_tool_finds_indexed_content`
+aynan kutilgan tarzda muvaffaqiyatsiz bo'lishi ko'rsatildi, keyin qaytarib
+(`diff` bilan 0 farq tasdiqlab) yashil ekani ko'rsatildi. Yangi
+`tests/unit/test_citation.py` (4 test, `test_groundedness.py`bilan bir
+xil "sof matn konstantasini pin qilish" naqshi) — jumladan
+`CITATION_INSTRUCTION`ning o'zi `ai_tools.py`ning haqiqiy locator
+formatidagi `document_id=`/`chunk=` so'zlarini nomlaganini tekshiradigan
+test, kelajakda ikkisi bir-biridan jimgina uzoqlashib ketmasligi uchun.
+
+**Eval harness** (`backend/scripts/citation_eval.py`) — `groundedness_
+eval.py`ning aynan bir xil konventsiyasi, lekin har ikkala provayder
+(chat VA embedding) sozlanmaguncha ishlashdan bosh tortadi (citation'ning
+o'zi haqiqiy `knowledge_search` round-trip'isiz ma'nosiz). Ikki
+stsenariy: `cited_claim` — haqiqiy, boshqacha taxmin qilib bo'lmaydigan
+fakt (o'ylab topilgan xarid buyurtma raqami) bilan hujjat yuklanadi,
+model undan foydalanib javob berishi VA citation'ni ko'rsatishi
+so'raladi; PASS = javobda HAQIQIY document_id (aniq shu hujjatning o'zi)
+VA "chunk=" so'zi borligi. `no_fabricated_citation_without_a_source` —
+hech qanday hujjat javob bermaydigan savol; PASS = javobda HECH QANDAY
+"document_id="-shaklidagi citation yo'qligi (model'ning o'zidan to'qib,
+unga soxta citation yopishtirib qo'ymasligi — bu FR-KNW-006'ning o'z
+groundedness ko'rsatmasi bilan birga ishlashini tasdiqlaydi).
+
+**Haqiqiy natija** (real Gemini'ga qarshi): ikkalasi ham PASS — `cited_
+claim`'da model aynan "[manba: document_id=<haqiqiy-uuid>, chunk=0]"ni
+so'z-so'ziga ko'chirib qo'ydi; `no_fabricated_citation_without_a_source`da
+esa (groundedness ko'rsatmasining o'zi bilan mos) "Bu savolga javob
+berish uchun ma'lumot yetarli emas" deb ochiq rad etdi, hech qanday
+soxta citation qo'shmasdan. OpenAI (tarmoq bloklangan) va Claude
+(Anthropic hisobida kredit yetarli emas) — ikkalasi ham oldindan
+hujjatlashtirilgan, bu ish bilan aloqasiz sabablar bilan ERROR qaytardi.
+
+Frontend'ga hech narsa qo'shilmadi — chat UI assistant matnini o'zgarishsiz
+render qiladi, citation locator shunchaki javob matnining bir qismi
+sifatida tabiiy ko'rinadi (FR-KNW-006'ning o'zi ham aynan shu sababdan
+frontend o'zgarishi talab qilmagan edi).
+
+659 test (655 + 4: `test_citation.py`), barchasi real Postgres(+Redis)'da;
+`ruff`/`mypy src/doda`/`mypy scripts` toza.

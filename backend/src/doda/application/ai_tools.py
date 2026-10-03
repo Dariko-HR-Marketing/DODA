@@ -191,8 +191,16 @@ async def dispatch_read_tool(
         )
         if not chunks:
             return "No matching documents found."
+        # FR-KNW-004: this exact "[manba: document_id=..., chunk=...]"
+        # shape is what CITATION_INSTRUCTION (doda.ai.citation) asks the
+        # model to copy back verbatim next to any claim drawn from it —
+        # document_id + chunk_index together resolve back to one real
+        # DocumentChunk row (the same source-lineage fields FR-KNW-002
+        # indexed each chunk with), so a citation stays traceable rather
+        # than degrading into free text.
         return "\n".join(
-            f"- (document_id={chunk.document_id}) {chunk.content[:_KNOWLEDGE_SEARCH_SNIPPET_CHARS]}"
+            f"- [manba: document_id={chunk.document_id}, chunk={chunk.chunk_index}] "
+            f"{chunk.content[:_KNOWLEDGE_SEARCH_SNIPPET_CHARS]}"
             for chunk in chunks
         )
 

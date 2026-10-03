@@ -17,6 +17,7 @@ from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy import select
 
 from doda.ai.capabilities import UnsupportedModelCapabilityError
+from doda.ai.citation import CITATION_INSTRUCTION
 from doda.ai.errors import (
     ModelAuthenticationError,
     ModelNotConfiguredError,
@@ -506,9 +507,9 @@ async def test_an_ambiguous_message_sends_no_language_directive_at_all(
 ) -> None:
     """No language directive at all (empty string from
     response_language_instruction) when the message is ambiguous and
-    there's no pin/workspace default — but FR-KNW-006's groundedness
-    instruction is unconditional, so `instructions` is never actually
-    empty."""
+    there's no pin/workspace default — but FR-KNW-004/006's citation and
+    groundedness instructions are unconditional, so `instructions` is
+    never actually empty."""
     fake_gateway = _InstructionRecordingGateway()
     monkeypatch.setattr(
         "doda.application.conversation_service.get_gateway", lambda provider, settings: fake_gateway
@@ -527,7 +528,7 @@ async def test_an_ambiguous_message_sends_no_language_directive_at_all(
         headers=_auth_headers(member.session_id),
         content="42",
     )
-    assert fake_gateway.received_instructions == [GROUNDEDNESS_INSTRUCTION]
+    assert fake_gateway.received_instructions == [f"{GROUNDEDNESS_INSTRUCTION} {CITATION_INSTRUCTION}"]
     assert "tilida javob ber" not in fake_gateway.received_instructions[0]
 
 

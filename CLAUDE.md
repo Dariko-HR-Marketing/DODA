@@ -9760,3 +9760,62 @@ tushirilganda izchil yashil ekani alohida tasdiqlandi.
 scripts` toza; frontend `tsc`/ESLint toza, production build
 muvaffaqiyatli. Migratsiya round-trip (0029→0030→0029→0030) qo'lda
 tekshirildi.
+
+**FR-KNW-004 (Citation-required rejim: har muhim claim source locator
+bilan, Must) qurildi — TRD'ning o'z EVAL-GRD-010'si bu ID'ni FR-KNW-006
+bilan bir qatorda, "Ishonchli javob" ostida birgalikda ro'yxatlagan, va
+FR-KNW-006'ning o'zi (shu Gemini tool-call bug tuzatishi bilan birga)
+qurilgandan keyin bu ham sof prompt-engineering ish bo'lib qoldi — yangi
+infratuzilma yoki Product Owner qarori kerak emas edi.** `docs/design-
+proposals/FR-KNW-memory-design-notes.md` bu ID'ni avval "003'ning o'z
+retrieval mexanizmi bor, lekin citation UI/format qismi hali qurilmagan"
+deb C toifasida qoldirgan edi — qayta ko'rib chiqilganda bu "UI/format"
+degani aslida sof prompt+tool-result formatlash ishi ekani aniqlandi,
+yangi frontend komponenti ham, yangi qaror ham kerak emas.
+
+`doda.ai.citation.CITATION_INSTRUCTION` — `GROUNDEDNESS_INSTRUCTION`bilan
+bir xil "bu PROMPT, kod-darajasidagi gate emas" falsafasi: modelga
+`knowledge_search` natijasidan olingan har bir da'voni darhol o'sha
+natijada ko'rsatilgan manba belgisini ANIQ, o'zgartirmasdan ko'chirib
+qo'yishni so'raydi. Bu locator formati o'ylab topilmagan — `ai_tools.
+dispatch_read_tool`'ning o'z `knowledge_search` filiali endi har bir
+qaytarilgan chunk'ga `[manba: document_id=..., chunk=...]` prefiksini
+qo'shadi (avval faqat `document_id` bor edi, `chunk_index` yo'q edi —
+FR-KNW-002'ning o'z source-lineage maydonlaridan biri, bitta hujjat
+ichidagi bitta aniq chunk'ga ishora qilish uchun zarur). `CITATION_
+INSTRUCTION` `GROUNDEDNESS_INSTRUCTION`bilan bir qatorda, `stream_
+message`'ning `instructions`ga SHARTSIZ qo'shildi.
+
+Audit-zanjiri uslubida isbotlandi: `ai_tools.py`ning yangi locator
+formatini vaqtincha eski (faqat `document_id`) formatga qaytarib,
+yangilangan `test_knowledge_search_tool_finds_indexed_content` aynan
+kutilgan tarzda muvaffaqiyatsiz bo'lishi ko'rsatildi, keyin qaytarib
+(`diff` bilan 0 farq tasdiqlab) yashil ekani ko'rsatildi. Yangi `tests/
+unit/test_citation.py` (4 test) — jumladan `CITATION_INSTRUCTION`ning
+o'zi `ai_tools.py`ning haqiqiy locator formatidagi `document_id=`/
+`chunk=` so'zlarini nomlaganini tekshiradigan test, kelajakda ikkisi
+bir-biridan jimgina uzoqlashib ketmasligi uchun.
+
+**Eval harness** (`backend/scripts/citation_eval.py`) — `groundedness_
+eval.py`ning aynan bir xil konventsiyasi, lekin ikkala provayder (chat
+VA embedding) sozlanmaguncha ishlashdan bosh tortadi (citation'ning o'zi
+haqiqiy `knowledge_search` round-trip'isiz ma'nosiz). Ikki stsenariy:
+`cited_claim` (haqiqiy, o'ylab topilgan fakt bilan hujjat, model undan
+foydalanib citation ko'rsatishi so'raladi; PASS = javobda HAQIQIY
+document_id VA "chunk=") va `no_fabricated_citation_without_a_source`
+(hech qanday hujjat javob bermaydigan savol; PASS = javobda hech qanday
+citation yo'qligi — model o'zidan to'qib, unga soxta citation
+yopishtirib qo'ymasligi, FR-KNW-006'ning groundedness ko'rsatmasi bilan
+birga ishlashini tasdiqlaydi).
+
+**Haqiqiy natija** (real Gemini'ga qarshi): ikkalasi ham PASS — model
+aynan "[manba: document_id=<haqiqiy-uuid>, chunk=0]"ni so'z-so'ziga
+ko'chirib qo'ydi, manbasiz savolda esa hech qanday soxta citation
+qo'shmasdan "Bu savolga javob berish uchun ma'lumot yetarli emas" deb
+ochiq rad etdi. OpenAI/Claude — ikkalasi ham oldindan hujjatlashtirilgan,
+bu ish bilan aloqasiz sabablar (tarmoq bloki, kredit yetarli emas) bilan
+ERROR qaytardi. Frontend'ga hech narsa qo'shilmadi — chat UI assistant
+matnini o'zgarishsiz render qiladi.
+
+659 test, barchasi real Postgres(+Redis)'da; `ruff`/`mypy src/doda`/
+`mypy scripts` toza.
