@@ -46,9 +46,10 @@ from doda.api.conversation_schemas import (
     SwitchProviderRequest,
 )
 from doda.api.dependencies import RequestContext, get_request_context
-from doda.application.authz_service import authorize_use_chat
+from doda.application.authz_service import authorize_delete_conversation, authorize_use_chat
 from doda.application.conversation_service import (
     TurnChunk,
+    delete_conversation,
     list_conversations_for_workspace,
     list_messages,
     regenerate_message,
@@ -143,6 +144,19 @@ async def _get_owned_conversation(ctx: RequestContext, conversation_id: uuid.UUI
     if conversation is None or conversation.workspace_id != ctx.workspace.workspace_id:
         raise HTTPException(status_code=404, detail="conversation not found")
     return conversation
+
+
+@router.delete("/v1/workspaces/{workspace_id}/conversations/{conversation_id}", status_code=204)
+async def delete_workspace_conversation(
+    conversation_id: uuid.UUID, ctx: RequestContext = Depends(get_request_context)
+) -> None:
+    """FR-KNW-007/FR-CTL-002: deleting a 'Working' memory record. Its
+    Message children vanish via the DB-level CASCADE migration 0031
+    added — delete_conversation never deletes them itself."""
+    authorize_use_chat(ctx.workspace)
+    conversation = await _get_owned_conversation(ctx, conversation_id)
+    authorize_delete_conversation(ctx.workspace, conversation)
+    await delete_conversation(ctx.db, conversation)
 
 
 @router.get(

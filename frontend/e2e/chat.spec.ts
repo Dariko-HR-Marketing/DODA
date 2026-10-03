@@ -383,3 +383,52 @@ test("AI provider settings: enable/disable, test connection, fallback toggle, my
 
   expect(consoleErrors, `unexpected browser console errors: ${consoleErrors.join("\n")}`).toEqual([]);
 });
+
+test("chat: deleting a conversation removes it and cascades its messages (FR-KNW-007)", async ({ page }) => {
+  const consoleErrors: string[] = [];
+  page.on("console", (msg) => {
+    if (msg.type() === "error") consoleErrors.push(msg.text());
+  });
+  page.on("pageerror", (err) => consoleErrors.push(String(err)));
+
+  await page.goto("/login");
+  await page.fill("#session-id", SESSION_ID);
+  await page.click('button[type="submit"]');
+  await page.waitForURL("**/workspaces");
+  await page.goto(`/workspaces/${WORKSPACE_ID}/chat`);
+
+  const needle = "o'chiriladigan suhbat belgisi 99";
+  await page.click('button:has-text("Yangi suhbat")');
+  await expect(page.getByPlaceholder("Xabar yozing...")).toBeVisible();
+  await page.fill('input[placeholder="Xabar yozing..."]', needle);
+  await page.click('button:has-text("Yuborish")');
+  await expect(page.getByText(needle, { exact: false }).first()).toBeVisible();
+
+  // The conversation just created is prepended to the sidebar (newest
+  // first), the same ordering GET .../conversations returns — so it is
+  // both the sidebar's first <li> and this list's first element.
+  const listBefore = await page.request.get(
+    `http://localhost:8000/v1/workspaces/${WORKSPACE_ID}/conversations`,
+    { headers: { Authorization: `Bearer ${SESSION_ID}` } },
+  );
+  const conversationId = (await listBefore.json())[0].id;
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator("aside ul li").first().getByRole("button", { name: "Suhbatni o'chirish" }).click();
+
+  // Deselected back to the empty state — its messages are gone from the
+  // main panel too, not merely filtered out of the sidebar.
+  await expect(page.getByText("Suhbat tanlang yoki yangisini yarating.")).toBeVisible();
+  await expect(page.getByText(needle)).not.toBeVisible();
+
+  // Direct backend check, not the page's own fetch — proves the delete is
+  // real and its Message children actually cascade (migration 0031), not
+  // just a UI-side filter.
+  const messagesAfter = await page.request.get(
+    `http://localhost:8000/v1/workspaces/${WORKSPACE_ID}/conversations/${conversationId}/messages`,
+    { headers: { Authorization: `Bearer ${SESSION_ID}` } },
+  );
+  expect(messagesAfter.status()).toBe(404);
+
+  expect(consoleErrors, `unexpected browser console errors: ${consoleErrors.join("\n")}`).toEqual([]);
+});

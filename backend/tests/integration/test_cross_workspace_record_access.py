@@ -498,3 +498,37 @@ async def test_a_sibling_workspaces_message_cannot_be_targeted_for_regeneration(
         headers=_auth_headers(seeded["session_a"]),
     )
     assert response.status_code == 404
+
+
+async def test_a_sibling_workspaces_conversation_cannot_be_deleted(
+    client: AsyncClient, db_available: bool
+) -> None:
+    """FR-KNW-007/FR-CTL-002: the new DELETE endpoint reuses
+    `_get_owned_conversation` unchanged, same as every other
+    conversation-scoped route in this file — this proves it actually
+    holds for THIS endpoint rather than assuming the shared guard is
+    enough."""
+    seeded = await _seed_two_workspaces_one_customer()
+
+    conversation_b = await client.post(
+        f"/v1/workspaces/{seeded['workspace_b']}/conversations",
+        json={},
+        headers=_auth_headers(seeded["session_b"]),
+    )
+    assert conversation_b.status_code == 200
+    conversation_b_id = conversation_b.json()["id"]
+
+    # A (workspace_admin of workspace_a, not B's workspace) names B's
+    # conversation_id but its own workspace_a in the URL.
+    response = await client.delete(
+        f"/v1/workspaces/{seeded['workspace_a']}/conversations/{conversation_b_id}",
+        headers=_auth_headers(seeded["session_a"]),
+    )
+    assert response.status_code == 404
+
+    # Denied, not silently ignored — B's conversation is still there.
+    still_there = await client.get(
+        f"/v1/workspaces/{seeded['workspace_b']}/conversations/{conversation_b_id}/messages",
+        headers=_auth_headers(seeded["session_b"]),
+    )
+    assert still_there.status_code == 200

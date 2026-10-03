@@ -18,7 +18,7 @@ qondirmaydi — bu hujjat har bir ID'ni alohida, TRD'ning o'z matniga
 | FR-KNW-004 | — | **Qurildi** — `CITATION_INSTRUCTION` + knowledge_search'ning o'z "[manba: document_id=..., chunk=...]" locator formati, real Gemini'ga qarshi `citation_eval.py` bilan isbotlandi. Pastga qarang. |
 | FR-KNW-005 | — | **Qurildi** — mexanizmning o'zi (CASCADE + blob delete) 002/001 davridanoq bor edi, lekin TRD'ning o'z qabul mezoni ("retrieval 0 qaytaradi; blob mavjud emas") hech qachon shu aniq shaklda, end-to-end tekshirilmagan edi. Pastga qarang. |
 | FR-KNW-006 | — | **Qurildi** — unconditional `GROUNDEDNESS_INSTRUCTION` har bir burilishga qo'shiladi, real Gemini'ga qarshi uch stsenariyli eval bilan isbotlandi (`backend/scripts/groundedness_eval.py`). Pastga qarang. |
-| FR-KNW-007 / FR-CTL-004 | C (qisman A) | "Preference" xotira turi allaqachon boshqa ID'lar ostida qurilgan; qolgan to'rt turi (Working/Episodic/Semantic/Sensitive) yangi PO qarori kerak |
+| FR-KNW-007 / FR-CTL-004 | C (qisman A, qisman qurildi) | "Preference" allaqachon boshqa ID'lar ostida qurilgan; **"Working" endi ham qurildi** (`DELETE .../conversations/{id}`, migration 0031 ON DELETE CASCADE); qolgan ikki turi (Episodic/Semantic) FR-KNW-002/003'ga allaqachon bog'liq edi, endi ham ochiq (relevance/consent dizayni hali yo'q); Sensitive hamon yangi PO qarori kerak |
 | FR-KNW-008 | C | Asinxron ingest+progress — 002'ning SINXRON versiyasi qurilgandan keyin ham, bu hamon alohida ish (job-queue infratuzilmasi, FR-KNW-002'ning o'z docstring'ida ochiq qoldirilgan) |
 | FR-KNW-009 | — | **Qurildi** — `Document.superseded_by_id` orqali versiyalash + `search_knowledge`ning o'z exclusion filtri. Pastga qarang. |
 
@@ -87,14 +87,25 @@ tuzatishidan keyin) talabini qondiradi. Bu qurilganda "memory" atamasi
 ishlatilmagan edi — TRD 8-bo'limining o'zi buni keyinroq o'qib
 solishtirilganda aynan shu qatlamning bir qismi ekani ma'lum bo'ldi.
 
-**Working/Episodic/Semantic/Sensitive — yangi Product Owner qarorini
-talab qiladi, qurilmadi**:
-1. **Working** (joriy chatdagi vaqtinchalik kontekst) — bu allaqachon
-   `conversation_service.stream_message`ning o'z `history`si (suhbat
-   davomidagi xabarlar) orqali AMALDA mavjud, lekin TRD uni alohida
-   "memory" sifatida nomlab, retention/consent siyosatiga bog'laydi —
-   buni alohida ID sifatida "qurish" kerakmi, yoki mavjud suhbat
-   tarixining o'zi yetarlimi, Product Owner hal qilishi kerak savol.
+**Working — endi qurildi (qolgan uch tur hamon yangi PO qarori talab
+qiladi yoki FR-KNW-002/003'ning o'z blokeriga bog'liq)**:
+
+1. **Working** (joriy chatdagi vaqtinchalik kontekst) —
+   `conversation_service.stream_message`ning o'z `history`si orqali
+   AMALDA mavjud edi, lekin TRD'ning o'z qabul mezoni ("foydalanuvchi
+   har bir memory yozuvini ko'radi VA O'CHIRA OLADI") faqat ko'rish
+   (`GET .../messages`) yarmini qondirardi — o'chirish endpointi umuman
+   yo'q edi. Yangi `DELETE /v1/workspaces/{id}/conversations/{id}`
+   (`authorize_delete_conversation`: egasi yoki workspace_admin,
+   `authorize_task_mutation`ning aynan bir xil shakli) va migration
+   0031 (`conversation_messages_conversation_id_fkey`ga `ON DELETE
+   CASCADE` — 0013 hech qachon buni o'rnatmagan edi, `knowledge_
+   document_chunks`ning 0029'dagi CASCADE'i bilan bir xil naqsh, faqat
+   mavjud constraint'ni ALTER qilish orqali, 0013'ning o'zini
+   o'zgartirmasdan). Bu ham FR-CTL-002'ning uzoq vaqtdan beri "2-bosqich,
+   hali qurilmagan" deb qoldirilgan "memory o'chirish" bo'shlig'ining
+   bir qismini yopadi — Conversation/Knowledge domenlari endi mavjud
+   bo'lgani uchun bu blok endi to'g'ri emas edi.
 2. **Episodic** ("oldingi task natijasi", "relevance + consent" bilan
    yoziladi) — bu FR-KNW-002/003'ning retrieval mexanizmiga tayanadi
    (task natijasini keyingi suhbatda "eslash" degani — semantik qidiruv
@@ -137,10 +148,10 @@ to'g'rilandi.
 To'qqizta FR-KNW ID'idan ettitasi (001, 002, 003, 004, 005, 006, 009)
 qurilgan. Qolgan ikkitasidan FR-KNW-008 (asinxron ingest) alohida,
 job-queue infratuzilmasi talab qiladigan ish bo'lib qoladi. FR-KNW-007/
-FR-CTL-004 (memory) — beshta turdan bittasi (Preference) allaqachon
-boshqa ID'lar ostida qondirilgan, qolgan to'rttasi (Working/Episodic/
-Semantic/Sensitive) yangi Product Owner qaroriga bog'liq (Sensitive
-consent modeli — eng muhimi).
+FR-CTL-004 (memory) — beshta turdan ikkitasi (Preference, endi
+**Working**) allaqachon qondirilgan, qolgan uchtasi (Episodic/Semantic —
+FR-KNW-002/003'ning o'z blokeriga bog'liq; Sensitive — yangi Product
+Owner qaroriga bog'liq, consent modeli eng muhimi) hamon ochiq.
 
 ## FR-KNW-002: qurilgan holat (texnik tafsilot)
 

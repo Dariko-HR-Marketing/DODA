@@ -749,6 +749,19 @@ export function listConversations(sessionId: string, workspaceId: string): Promi
   return apiFetch(`/v1/workspaces/${workspaceId}/conversations`, sessionId);
 }
 
+// FR-KNW-007/FR-CTL-002: deleting a "Working" memory record — the
+// conversation's messages cascade on the backend (migration 0031), so
+// nothing further is needed here.
+export function deleteConversation(
+  sessionId: string,
+  workspaceId: string,
+  conversationId: string,
+): Promise<void> {
+  return apiFetch(`/v1/workspaces/${workspaceId}/conversations/${conversationId}`, sessionId, {
+    method: "DELETE",
+  });
+}
+
 export function listConversationMessages(
   sessionId: string,
   workspaceId: string,

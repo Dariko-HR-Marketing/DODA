@@ -7,6 +7,7 @@ import {
   ApiError,
   clearWorkspaceAiPreference,
   createConversation,
+  deleteConversation,
   getWorkspaceAiPreference,
   getWorkspaceLanguageSetting,
   listConversationMessages,
@@ -46,6 +47,7 @@ export default function ChatPage() {
   const [pendingUserText, setPendingUserText] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [creatingConversation, setCreatingConversation] = useState(false);
+  const [deletingConversation, setDeletingConversation] = useState(false);
   const [pinProvider, setPinProvider] = useState<AiProvider>("OPENAI");
   const [pinModel, setPinModel] = useState("");
   const [pinning, setPinning] = useState(false);
@@ -139,6 +141,23 @@ export default function ChatPage() {
       setError(err instanceof ApiError ? err.message : "Suhbat yaratib bo'lmadi.");
     } finally {
       setCreatingConversation(false);
+    }
+  }
+
+  async function handleDeleteConversation(conversationId: string) {
+    if (sessionId === null || deletingConversation) return;
+    if (!window.confirm("Bu suhbatni butunlay o'chirishni tasdiqlaysizmi? Bu amalni qaytarib bo'lmaydi.")) {
+      return;
+    }
+    setDeletingConversation(true);
+    try {
+      await deleteConversation(sessionId, workspaceId, conversationId);
+      setConversations((prev) => prev?.filter((c) => c.id !== conversationId) ?? null);
+      setSelectedId((current) => (current === conversationId ? null : current));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Suhbatni o'chirib bo'lmadi.");
+    } finally {
+      setDeletingConversation(false);
     }
   }
 
@@ -520,14 +539,23 @@ export default function ChatPage() {
           </button>
           <ul className="space-y-1">
             {conversations?.map((conversation) => (
-              <li key={conversation.id}>
+              <li key={conversation.id} className="flex items-center gap-1">
                 <button
                   onClick={() => setSelectedId(conversation.id)}
-                  className={`w-full truncate rounded-md px-2 py-1.5 text-left text-sm ${
+                  className={`min-w-0 flex-1 truncate rounded-md px-2 py-1.5 text-left text-sm ${
                     conversation.id === selectedId ? "bg-gray-100 font-medium" : "text-gray-600 hover:bg-gray-50"
                   }`}
                 >
                   {conversation.title ?? "Suhbat"}
+                </button>
+                <button
+                  onClick={() => handleDeleteConversation(conversation.id)}
+                  disabled={deletingConversation}
+                  aria-label="Suhbatni o'chirish"
+                  title="Suhbatni o'chirish"
+                  className="shrink-0 rounded-md px-1.5 py-1 text-xs text-gray-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                >
+                  ✕
                 </button>
               </li>
             ))}

@@ -207,6 +207,153 @@ async def test_conversation_list_and_messages_do_not_leak_across_workspaces(
     assert cross_post.status_code == 404
 
 
+async def _two_members_in_one_workspace(
+    *, role_a: str = "member", role_b: str = "member"
+) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID]:
+    """Same shape as test_actions_api.py's own helper of the same name —
+    seed_workspace_member always creates a fresh workspace per call, so
+    FR-KNW-007's owner-vs-workspace_admin deletion tests below build the
+    two-identities-one-workspace scenario by hand. Returns (customer_id,
+    workspace_id, session_a_id, session_b_id)."""
+    from doda.domain.customer.models import Customer
+    from doda.domain.workspace.models import WorkspaceMembership
+
+    customer_id = uuid.uuid4()
+    async with tenant_scoped_session(customer_id) as db:
+        user_a = User(oidc_subject_hash=str(uuid.uuid4()), display_name="A")
+        user_b = User(oidc_subject_hash=str(uuid.uuid4()), display_name="B")
+        db.add_all([user_a, user_b])
+        await db.flush()
+
+        db.add(Customer(id=customer_id, name="Shared Customer"))
+        await db.flush()
+
+        membership_a = CustomerMembership(customer_id=customer_id, user_id=user_a.id, role="member")
+        membership_b = CustomerMembership(customer_id=customer_id, user_id=user_b.id, role="member")
+        db.add_all([membership_a, membership_b])
+        await db.flush()
+
+        workspace = await create_workspace(db, customer_id=customer_id, name="Shared Workspace")
+        db.add_all(
+            [
+                WorkspaceMembership(
+                    customer_id=customer_id,
+                    customer_membership_id=membership_a.id,
+                    workspace_id=workspace.id,
+                    role=role_a,
+                ),
+                WorkspaceMembership(
+                    customer_id=customer_id,
+                    customer_membership_id=membership_b.id,
+                    workspace_id=workspace.id,
+                    role=role_b,
+                ),
+            ]
+        )
+        await db.flush()
+
+        session_a = await create_session(db, user_id=user_a.id, auth_strength=AuthStrength.AAL1)
+        session_b = await create_session(db, user_id=user_b.id, auth_strength=AuthStrength.AAL1)
+
+    return customer_id, workspace.id, session_a.id, session_b.id
+
+
+async def test_the_owner_can_delete_their_own_conversation_and_its_messages_cascade(
+    client: AsyncClient, db_available: bool
+) -> None:
+    """FR-KNW-007/FR-CTL-002: deleting a 'Working' memory record. Every
+    created conversation already has at least one real Message row
+    (NullModelGateway's own reply, written before this delete runs) —
+    so this test only passes at all if migration 0031's ON DELETE CASCADE
+    actually fires; without it, the delete would fail with a foreign-key
+    violation instead of 204 (proven for real below via a migration
+    downgrade/upgrade round-trip, not just asserted here)."""
+    member = await seed_workspace_member()
+    conversation_id, base_url = await _create_conversation(client, member)
+    await _post_message(
+        client, f"{base_url}/messages", headers=_auth_headers(member.session_id), content="Salom"
+    )
+
+    async with tenant_scoped_session(member.customer_id) as db:
+        messages_before = (
+            (await db.execute(select(Message).where(Message.conversation_id == uuid.UUID(conversation_id))))
+            .scalars()
+            .all()
+        )
+    assert len(messages_before) == 2  # the user message + NullModelGateway's reply
+
+    delete = await client.delete(base_url, headers=_auth_headers(member.session_id))
+    assert delete.status_code == 204
+
+    listed = await client.get(f"{base_url}/messages", headers=_auth_headers(member.session_id))
+    assert listed.status_code == 404
+
+    async with tenant_scoped_session(member.customer_id) as db:
+        remaining = (
+            await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conversation_id)))
+        ).scalar_one_or_none()
+        remaining_messages = (
+            (await db.execute(select(Message).where(Message.conversation_id == uuid.UUID(conversation_id))))
+            .scalars()
+            .all()
+        )
+    assert remaining is None
+    assert remaining_messages == []
+
+
+async def test_a_workspace_admin_may_delete_another_members_conversation(
+    client: AsyncClient, db_available: bool
+) -> None:
+    customer_id, workspace_id, owner_session, admin_session = await _two_members_in_one_workspace(
+        role_a="member", role_b="workspace_admin"
+    )
+    create = await client.post(
+        f"/v1/workspaces/{workspace_id}/conversations", json={}, headers=_auth_headers(owner_session)
+    )
+    conversation_id = create.json()["id"]
+
+    delete = await client.delete(
+        f"/v1/workspaces/{workspace_id}/conversations/{conversation_id}",
+        headers=_auth_headers(admin_session),
+    )
+    assert delete.status_code == 204
+
+
+async def test_a_plain_member_cannot_delete_another_members_conversation(
+    client: AsyncClient, db_available: bool
+) -> None:
+    customer_id, workspace_id, owner_session, bystander_session = await _two_members_in_one_workspace(
+        role_a="member", role_b="member"
+    )
+    create = await client.post(
+        f"/v1/workspaces/{workspace_id}/conversations", json={}, headers=_auth_headers(owner_session)
+    )
+    conversation_id = create.json()["id"]
+
+    delete = await client.delete(
+        f"/v1/workspaces/{workspace_id}/conversations/{conversation_id}",
+        headers=_auth_headers(bystander_session),
+    )
+    assert delete.status_code == 403
+    assert delete.json()["code"] == "DENY"
+
+    # Denied, not silently ignored — the conversation is still there.
+    listed = await client.get(
+        f"/v1/workspaces/{workspace_id}/conversations/{conversation_id}/messages",
+        headers=_auth_headers(owner_session),
+    )
+    assert listed.status_code == 200
+
+
+async def test_deleting_an_unknown_conversation_is_a_404(client: AsyncClient, db_available: bool) -> None:
+    member = await seed_workspace_member()
+    delete = await client.delete(
+        f"/v1/workspaces/{member.workspace_id}/conversations/{uuid.uuid4()}",
+        headers=_auth_headers(member.session_id),
+    )
+    assert delete.status_code == 404
+
+
 async def test_search_finds_a_matching_message_case_insensitively(
     client: AsyncClient, db_available: bool
 ) -> None:

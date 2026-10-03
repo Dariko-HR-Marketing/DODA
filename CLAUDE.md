@@ -9819,3 +9819,106 @@ matnini o'zgarishsiz render qiladi.
 
 659 test, barchasi real Postgres(+Redis)'da; `ruff`/`mypy src/doda`/
 `mypy scripts` toza.
+
+**FR-KNW-007/FR-CTL-004'ning (TRD 8-bo'lim, Memory modeli) "Working"
+turi qurildi — `docs/design-proposals/FR-KNW-memory-design-notes.md`ning
+o'zi FR-KNW-003 qurilgandan keyin yangilagan baholashga ko'ra.** Besh
+memory turidan (Working/Preference/Episodic/Semantic/Sensitive)
+Preference allaqachon boshqa ID'lar ostida (FR-CONV-001/FR-WKS-007/
+FR-ADM-006) qurilgan edi; bu safar qayta ko'rib chiqishda aniqlandi:
+Working turi ("joriy chat konteksti") ham allaqachon `conversation_
+service.stream_message`ning o'z `history`si orqali AMALDA mavjud edi,
+lekin TRD'ning o'z qabul mezoni — "foydalanuvchi har bir memory
+yozuvini ko'radi VA O'CHIRA OLADI" — faqat ko'rish yarmini (`GET
+.../messages`) qondirardi. Hech qanday conversation-o'chirish endpointi
+umuman yo'q edi — bu ham FR-CTL-002'ning uzoq vaqtdan beri "memory
+o'chirish — 2-bosqich, hali qurilmagan" deb qoldirilgan bilingan
+cheklovining bir qismini yopadi (Conversation/Knowledge domenlari endi
+mavjud bo'lgani uchun o'sha eski blok endi to'g'ri emas edi — bu eski
+qator, xronologik yozuv sifatida, o'zgartirilmadi, faqat shu yangi
+yozuv orqali yangilangani qayd etiladi).
+
+Yetishmagan narsa — `Message.conversation_id`ning FK'si — real Postgres'ga
+to'g'ridan-to'g'ri so'rov bilan (`pg_constraint`) tasdiqlandi:
+`confdeltype='a'` (NO ACTION), 0013-migratsiyaning o'zidanoq. Bu demak
+Conversation qatorini o'chirish, ichida kamida bitta Message bo'lsa (bu
+har doim rost — `stream_message`ning o'zi 1-qadamda user xabarini
+saqlaydi), oddiy foreign-key violation bilan qulagan bo'lardi. Yangi
+0031-migratsiya mavjud constraint'ni (0013'ning o'zini o'zgartirmasdan,
+"migratsiya tarixini buzma" qoidasi bo'yicha) `op.drop_constraint`+
+`op.create_foreign_key(..., ondelete="CASCADE")` bilan ALTER qiladi —
+0022'ning `notifications`'s CHECK constraint'ini kengaytirgan,
+0030'ning `knowledge_documents`ga yangi FK qo'shgan naqshlarining
+davomi. Round-trip (0030→0031→0030→0031) real Postgres'ga qarshi
+qo'lda tekshirildi, har ikki yo'nalishda ham `pg_constraint`dan
+to'g'ridan-to'g'ri o'qib (`confdeltype`: 'a' → 'c' → 'a' → 'c').
+
+`conversation_service.delete_conversation` — faqat `Conversation`
+qatorini o'chiradi; uning `Message` farzandlari endi DB darajasida
+CASCADE orqali ketadi, xuddi `knowledge_document_chunks`ning o'z
+`Document` otasidan CASCADE orqali ketishi kabi (0029) — bu funksiya
+hech qachon Message qatorlarini o'zi o'chirishga muhtoj emas, hatto
+kelajakda kimdir buni unutib qo'ysa ham. Yangi
+`authorize_delete_conversation` (`authz_service.py`) —
+`authorize_task_mutation`ning AYNAN bir xil "egasi yoki workspace_admin"
+shaklini takrorlaydi (bir xil supervisor-override mulohazasi — 10.2'da
+chat uchun alohida qator yo'q, xuddi `authorize_use_chat`ning o'zi
+kabi). `DELETE /v1/workspaces/{id}/conversations/{id}` mavjud
+`_get_owned_conversation` guard'ini qayta ishlatadi (workspace_id
+tekshiruvi avtorizatsiyadan OLDIN — boshqa har bir bitta-ID endpoint
+bilan bir xil "404 avtorizatsiyadan oldin" tartibi).
+
+CASCADE'ning haqiqiyligi audit-zanjiri uslubida isbotlandi: migratsiyani
+vaqtincha `alembic downgrade 0030`ga qaytarib (NO ACTION tiklanib),
+yangi `test_the_owner_can_delete_their_own_conversation_and_its_
+messages_cascade` aynan kutilgan tarzda — real `ForeignKeyViolation
+Error` bilan, `conversation_messages_conversation_id_fkey`ning o'z
+nomi bilan — muvaffaqiyatsiz bo'lishini ko'rsatdim, keyin
+`alembic upgrade head`ni qaytarib butun `test_conversations_api.py`
+(61 test, `test_cross_workspace_record_access.py` bilan birga) qaytadan
+yashil ekanini tasdiqladim. To'rtta qo'shimcha HTTP test: workspace_admin
+boshqa a'zoning suhbatini o'chira olishi, oddiy a'zo boshqasining
+suhbatini o'chira olmasligi (403, suhbat hamon joyida qolishi),
+noma'lum conversation_id 404. Yangi `test_a_sibling_workspaces_
+conversation_cannot_be_deleted` (`test_cross_workspace_record_access.py`)
+— bir xil customer ostidagi boshqa workspace'ning suhbatini o'chirishga
+urinish 404 (RLS bu holatda yordam bermaydi, faqat `_get_owned_
+conversation`ning o'z `workspace_id` tekshiruvi).
+
+Frontend: chat sahifasining har bir suhbat qatoriga "✕" o'chirish
+tugmasi qo'shildi (`window.confirm`, workspace archive tugmasining aynan
+bir xil "haqiqiy bir tomonlama UI harakat" mulohazasi bilan). Yangi,
+mustaqil E2E test (`chat.spec.ts`ning oxiriga, alohida spec/seed emas —
+mavjud `E2E_CHAT_` seed'ining tabiiy davomi) haqiqiy xabar yuborib,
+o'chirib, HAM UI'da (bo'sh holatga qaytish, matn yo'qolishi) HAM
+to'g'ridan-to'g'ri backend so'rovi bilan (`GET .../messages` → 404)
+tasdiqladi.
+
+**Haqiqiy, pre-existing muhit-drift xatosi (FR-KNW-007'ning o'zi
+yaratmagan) E2E tekshiruvida yana bir marta uchradi va xuddi avvalgi
+safargidek diagnostika qilindi**: `.env`da haqiqiy Gemini kaliti
+borligi sababli `chat.spec.ts`ning birinchi testi (NullModelGateway'ning
+"hali tanlanmagan" matnini kutadi) endi real Gemini javobi bilan
+muvaffaqiyatsiz bo'ladi — bu `docs/design-proposals/FR-KNW-memory-
+design-notes.md`da allaqachon hujjatlashtirilgan, bu PR doirasidan
+tashqarida qoldirilgan topilma. Buni aylanib o'tish uchun uchta AI
+kalitini (`DODA_GEMINI_API_KEY`/`DODA_OPENAI_API_KEY`/`DODA_CLAUDE_
+API_KEY`) vaqtincha `.env`dan olib tashlab (CI'ning o'z, hech qachon
+kalit o'rnatmaydigan holatini simulyatsiya qilib) backend qayta ishga
+tushirildi, barcha 19 E2E spec (jumladan yangi delete testi) shu holatda
+yashil ekani tasdiqlandi, so'ng `.env` zaxira nusxadan tiklanib
+(`diff` bilan bayt-ba-bayt bir xil ekani tasdiqlanib) qaytarildi — hech
+qanday kalit qiymati chat matniga yoki logga chiqmadi.
+
+664 test (659+5: 4 integration — `test_conversations_api.py`, 1 —
+`test_cross_workspace_record_access.py`), barchasi real Postgres'da;
+`ruff`/`mypy src/doda`/`mypy scripts` toza; frontend `tsc`/ESLint toza,
+production build muvaffaqiyatli; barcha 19 E2E spec (keyless, CI'ning
+o'z holatida) yashil. Migratsiya round-trip qo'lda tasdiqlandi.
+
+**Ataylab qolgan bo'shliq**: Episodic/Semantic turlari hamon FR-KNW-002/
+003'ning o'z gibrid retrieval mexanizmiga ("oldingi natijani eslash"
+semantik qidiruv talab qiladi) bog'liq — bu safar alohida qurilmadi,
+ularning dizayn eslatmasi o'zgarishsiz qoldi. Sensitive turi
+(shifrlash/consent modeli) hamon yangi Product Owner qarorini talab
+qiladi, eng xavfli/eng kech boshlanishi kerak qism sifatida ochiq.

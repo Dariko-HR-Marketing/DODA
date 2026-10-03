@@ -162,6 +162,19 @@ async def list_conversations_for_workspace(
     return list(result.scalars().all())
 
 
+async def delete_conversation(session: AsyncSession, conversation: Conversation) -> None:
+    """FR-KNW-007/FR-CTL-002: deleting a 'Working' memory record. Only
+    deletes the `Conversation` row itself — migration 0031 added
+    `ondelete="CASCADE"` to `conversation_messages.conversation_id`'s FK
+    specifically so its `Message` children vanish at the DB level,
+    matching how `knowledge_document_chunks` already cascades from its
+    own `Document` parent (0029); this function never needs to delete
+    Message rows itself, and never will even if a future caller forgets
+    to."""
+    await session.delete(conversation)
+    await session.flush()
+
+
 async def list_messages(
     session: AsyncSession, *, conversation_id: uuid.UUID, limit: int = 200
 ) -> list[Message]:

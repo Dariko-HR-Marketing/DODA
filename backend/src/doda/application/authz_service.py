@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from doda.domain.action.models import Action
+from doda.domain.conversation.models import Conversation
 from doda.domain.customer.models import Customer, CustomerMembership
 from doda.domain.identity.models import ActorKind, AuthStrength
 from doda.domain.security.decisions import Decision
@@ -251,6 +252,21 @@ def authorize_task_mutation(context: WorkspaceContext, task: Task) -> None:
     if not is_owner and context.role is not WorkspaceRole.WORKSPACE_ADMIN:
         raise AuthorizationError(
             Decision.DENY, "only the task owner or a workspace admin may change this task"
+        )
+
+
+def authorize_delete_conversation(context: WorkspaceContext, conversation: Conversation) -> None:
+    """FR-KNW-007/FR-CTL-002: 'Working' memory — "foydalanuvchi har bir
+    memory yozuvini ko'radi va o'chira oladi." No dedicated 10.2 row
+    (chat has none at all — see authorize_use_chat), so this mirrors
+    authorize_task_mutation's exact owner-or-workspace-admin shape: the
+    same supervisor-override reasoning applies equally here (a
+    workspace_admin, also reachable by a CustomerOwner who resolves as
+    WORKSPACE_ADMIN, may clean up another member's conversation)."""
+    is_owner = conversation.owner_id == f"user:{context.user_id}"
+    if not is_owner and context.role is not WorkspaceRole.WORKSPACE_ADMIN:
+        raise AuthorizationError(
+            Decision.DENY, "only the conversation owner or a workspace admin may delete it"
         )
 
 
