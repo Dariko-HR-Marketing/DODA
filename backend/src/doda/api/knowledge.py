@@ -14,6 +14,7 @@ from doda.api.dependencies import RequestContext, get_request_context
 from doda.api.knowledge_schemas import DocumentChunkOut, DocumentOut
 from doda.application.authz_service import authorize_use_knowledge
 from doda.application.knowledge_service import (
+    create_document_version,
     delete_document,
     index_document,
     ingest_file,
@@ -65,6 +66,7 @@ def _to_document_out(document: Document) -> DocumentOut:
         size_bytes=document.size_bytes,
         sha256=document.sha256,
         created_at=document.created_at,
+        superseded_by_id=document.superseded_by_id,
     )
 
 
@@ -185,3 +187,42 @@ async def delete_workspace_document(
     authorize_use_knowledge(ctx.workspace)
     document = await _get_owned_document(ctx, document_id)
     await delete_document(ctx.db, get_object_storage(get_settings()), document)
+
+
+@router.post("/v1/workspaces/{workspace_id}/documents/{document_id}/versions", response_model=DocumentOut)
+async def upload_document_version(
+    document_id: uuid.UUID,
+    file: UploadFile,
+    ctx: RequestContext = Depends(get_request_context),
+) -> DocumentOut:
+    """FR-KNW-009: `document_id` must be the CURRENT version of its own
+    chain (DocumentAlreadySupersededError -> 409 otherwise, see
+    create_document_version's own docstring). Same validation/storage/
+    indexing path as upload_document above — a new version is not
+    treated specially by file_validation or index_document, only by
+    which Document row previous_document.superseded_by_id ends up
+    pointing at."""
+    authorize_use_knowledge(ctx.workspace)
+    previous_document = await _get_owned_document(ctx, document_id)
+    settings = get_settings()
+    data = await _read_bounded(file, settings.knowledge_max_file_size_bytes)
+    new_document = await create_document_version(
+        ctx.db,
+        get_object_storage(settings),
+        previous_document,
+        uploader_id=f"user:{ctx.workspace.user_id}",
+        filename=file.filename or "",
+        declared_content_type=file.content_type or "",
+        data=data,
+        max_size_bytes=settings.knowledge_max_file_size_bytes,
+    )
+    if is_embedding_configured(settings):
+        await index_document(
+            ctx.db,
+            get_embedding_port(settings),
+            new_document,
+            data=data,
+            chunk_size=settings.knowledge_chunk_size_chars,
+            chunk_overlap=settings.knowledge_chunk_overlap_chars,
+        )
+    return _to_document_out(new_document)

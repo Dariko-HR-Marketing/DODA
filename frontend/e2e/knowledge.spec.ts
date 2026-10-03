@@ -118,3 +118,87 @@ test("FR-KNW-001: upload, list, download, reject, and delete a file", async ({ p
   const unexpected = consoleErrors.filter((text) => !text.includes("422") && !text.includes("503"));
   expect(unexpected).toEqual([]);
 });
+
+test("FR-KNW-009: a new version supersedes the old one, which stays downloadable", async ({ page }) => {
+  const consoleErrors: string[] = [];
+  page.on("console", (msg) => {
+    if (msg.type() === "error") consoleErrors.push(msg.text());
+  });
+  page.on("pageerror", (err) => consoleErrors.push(String(err)));
+
+  await test.step("log in and open the seeded workspace", async () => {
+    await page.goto("/login");
+    await page.fill("#session-id", SESSION_ID);
+    await page.click('button[type="submit"]');
+    await page.waitForURL("**/workspaces");
+    await page.getByText("Demo Workspace").click();
+    await page.waitForURL(`**/workspaces/${WORKSPACE_ID}`);
+  });
+
+  await test.step("upload the first version", async () => {
+    await page.setInputFiles('input[aria-label="Yuklanadigan fayl"]', {
+      name: "policy.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("v1 content"),
+    });
+    await page.click('form:has(input[aria-label="Yuklanadigan fayl"]) button[type="submit"]');
+    await expect(page.getByTestId("document-list").getByText("policy.txt")).toBeVisible();
+  });
+
+  await test.step("upload a new version and see the old one marked superseded", async () => {
+    await page
+      .getByTestId("document-list")
+      .locator("li")
+      .filter({ hasText: "policy.txt" })
+      .getByText("Yangi versiya yuklash")
+      .click();
+    await page.setInputFiles('input[aria-label="Yangi versiya fayli"]', {
+      name: "policy-v2.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("v2 content"),
+    });
+    await expect(page.getByTestId("document-list").getByText("policy-v2.txt")).toBeVisible();
+    await expect(page.getByTestId("document-superseded-badge")).toBeVisible();
+    // The superseded row no longer offers "Yangi versiya yuklash" (only
+    // the current tip of its own version chain may be versioned again —
+    // create_document_version's own DocumentAlreadySupersededError).
+    await expect(
+      page.getByTestId("document-list").locator("li").filter({ hasText: "policy.txt" }).getByText("Yangi versiya yuklash"),
+    ).toHaveCount(0);
+  });
+
+  await test.step("the superseded version is still downloadable, byte-for-byte", async () => {
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      page
+        .getByTestId("document-list")
+        .locator("li")
+        .filter({ hasText: "policy.txt" })
+        .getByText("Yuklab olish")
+        .click(),
+    ]);
+    const path = await download.path();
+    const fs = await import("node:fs/promises");
+    const content = path ? await fs.readFile(path) : Buffer.alloc(0);
+    expect(content.toString("utf-8")).toBe("v1 content");
+  });
+
+  await test.step("clean up both documents", async () => {
+    await page
+      .getByTestId("document-list")
+      .locator("li")
+      .filter({ hasText: "policy-v2.txt" })
+      .getByText("O'chirish")
+      .click();
+    await expect(page.getByTestId("document-list").getByText("policy-v2.txt")).toHaveCount(0);
+    await page
+      .getByTestId("document-list")
+      .locator("li")
+      .filter({ hasText: "policy.txt" })
+      .getByText("O'chirish")
+      .click();
+    await expect(page.getByTestId("document-list").getByText("Hali fayl yo'q.")).toBeVisible();
+  });
+
+  expect(consoleErrors).toEqual([]);
+});

@@ -41,6 +41,7 @@ from doda.application.conversation_service import (
 )
 from doda.application.customer_service import CustomerMembershipError, DuplicateMembershipError
 from doda.application.kill_switch_service import KillSwitchEngagedError
+from doda.application.knowledge_service import DocumentAlreadySupersededError
 from doda.application.notification_service import NotificationPreferenceError
 from doda.application.oidc_login_service import OidcNotConfiguredError, OidcStateMismatchError
 from doda.application.service_actor_service import ServiceActorAuthenticationError
@@ -230,6 +231,20 @@ def register_exception_handlers(app: FastAPI) -> None:
             status_code=422,
             content=_envelope(
                 code="DOCUMENT_INDEXING_FAILED",
+                message=str(exc),
+                trace_id=_trace_id(request),
+                retryable=False,
+            ),
+        )
+
+    @app.exception_handler(DocumentAlreadySupersededError)
+    async def _document_already_superseded(
+        request: Request, exc: DocumentAlreadySupersededError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=409,
+            content=_envelope(
+                code="DOCUMENT_ALREADY_SUPERSEDED",
                 message=str(exc),
                 trace_id=_trace_id(request),
                 retryable=False,

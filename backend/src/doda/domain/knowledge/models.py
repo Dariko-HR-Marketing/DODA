@@ -2,11 +2,8 @@
 accepted and stored (doda.storage.port.ObjectStoragePort). FR-KNW-002:
 DocumentChunk below — each chunk of a Document's extracted text, with
 its own embedding vector and source lineage (start/end character
-offset within the document; "version_id" is not modeled yet, since no
-versioning mechanism exists — FR-KNW-009 — so a Document is implicitly
-its own single version today). Retrieval (FR-KNW-003 onward) does not
-exist yet — hybrid search with reranking needs an eval dataset to
-measure against a baseline, a separate, larger piece of work.
+offset within the document). FR-KNW-003: hybrid retrieval (application.
+knowledge_service.search_knowledge).
 
 A Document row never represents a rejected upload: validation (doda.
 domain.knowledge.file_validation) runs and can raise BEFORE any Document
@@ -14,6 +11,18 @@ is constructed, so this table only ever holds files that passed it. A
 Document can have zero DocumentChunk rows — either its content type has
 no text extractor yet (images; see doda.domain.knowledge.
 text_extraction) or extraction found no text — neither is an error.
+
+FR-KNW-009: `superseded_by_id` is how versioning is modeled — NOT a
+separate `version`/`version_id` integer or a shared "lineage" row.
+`application.knowledge_service.create_document_version` creates a brand
+new Document row (its own fresh id, chunks, embeddings) and points the
+PREVIOUS document's `superseded_by_id` at it; "current version" is
+simply `superseded_by_id IS NULL`. A superseded Document is never
+deleted or stripped of its chunks — it stays fully downloadable (FR-
+KNW-005's deletion semantics are untouched and orthogonal) — only
+`search_knowledge` excludes its chunks from retrieval, which is the
+entirety of what FR-KNW-009's own acceptance criterion ("superseded
+version is not used as a source in the answer") asks for.
 """
 
 import uuid
@@ -51,6 +60,11 @@ class Document(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     # doda.domain.knowledge.file_validation.storage_key_for's output —
     # never derived from the caller-supplied filename.
     storage_key: Mapped[str] = mapped_column(String(256))
+    # FR-KNW-009: NULL means "this is the current version". See module
+    # docstring for the full versioning model.
+    superseded_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_documents.id", ondelete="SET NULL"), index=True
+    )
 
 
 class DocumentChunk(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):

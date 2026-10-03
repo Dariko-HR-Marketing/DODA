@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
@@ -36,6 +36,7 @@ import {
   requestTaskReminder,
   searchDocuments,
   uploadDocument,
+  uploadDocumentVersion,
   type ActionOut,
   type AuditEventOut,
   type DocumentChunkOut,
@@ -121,6 +122,12 @@ export default function WorkspacePage() {
   const [documentSearchQuery, setDocumentSearchQuery] = useState("");
   const [documentSearchResults, setDocumentSearchResults] = useState<DocumentChunkOut[] | null>(null);
   const [searchingDocuments, setSearchingDocuments] = useState(false);
+  // FR-KNW-009: one shared hidden file input, re-targeted per click
+  // rather than one ref per row (the document list is rendered
+  // dynamically, so a fixed set of refs doesn't fit).
+  const versionFileInputRef = useRef<HTMLInputElement>(null);
+  const [versionTargetDocumentId, setVersionTargetDocumentId] = useState<string | null>(null);
+  const [versioningDocumentId, setVersioningDocumentId] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     if (sessionId === null) return;
@@ -211,6 +218,32 @@ export default function WorkspacePage() {
       setError(err instanceof ApiError ? err.message : "Faylni o'chirib bo'lmadi.");
     } finally {
       setDeletingDocumentId(null);
+    }
+  }
+
+  function handleVersionButtonClick(doc: DocumentOut) {
+    if (versioningDocumentId !== null) return;
+    setVersionTargetDocumentId(doc.id);
+    versionFileInputRef.current?.click();
+  }
+
+  async function handleVersionFileSelected(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    const targetId = versionTargetDocumentId;
+    // Reset so picking the same filename again still fires onChange.
+    event.target.value = "";
+    if (sessionId === null || !file || targetId === null) return;
+    setVersioningDocumentId(targetId);
+    try {
+      await uploadDocumentVersion(sessionId, workspaceId, targetId, file);
+      refresh();
+    } catch (err) {
+      // FR-KNW-009: versioning an already-superseded document returns a
+      // specific DOCUMENT_ALREADY_SUPERSEDED message here, not generic.
+      setError(err instanceof ApiError ? err.message : "Yangi versiya yuklab bo'lmadi.");
+    } finally {
+      setVersioningDocumentId(null);
+      setVersionTargetDocumentId(null);
     }
   }
 
@@ -902,6 +935,14 @@ export default function WorkspacePage() {
             )}
           </ul>
         )}
+        <input
+          ref={versionFileInputRef}
+          type="file"
+          accept=".pdf,.docx,.xlsx,.txt,.png,.jpg,.jpeg"
+          aria-label="Yangi versiya fayli"
+          className="hidden"
+          onChange={handleVersionFileSelected}
+        />
         <ul data-testid="document-list" className="space-y-2">
           {documents?.map((doc) => (
             <li
@@ -909,7 +950,17 @@ export default function WorkspacePage() {
               className="flex items-center justify-between rounded-md border border-gray-200 px-3 py-2 text-sm"
             >
               <div className="flex flex-col">
-                <span>{doc.filename}</span>
+                <span>
+                  {doc.filename}
+                  {doc.superseded_by_id !== null && (
+                    <span
+                      data-testid="document-superseded-badge"
+                      className="ml-2 rounded bg-gray-200 px-1.5 py-0.5 text-xs text-gray-700"
+                    >
+                      Almashtirilgan
+                    </span>
+                  )}
+                </span>
                 <span className="text-xs text-gray-500">
                   {doc.content_type} · {formatFileSize(doc.size_bytes)}
                 </span>
@@ -922,6 +973,16 @@ export default function WorkspacePage() {
                 >
                   Yuklab olish
                 </button>
+                {doc.superseded_by_id === null && (
+                  <button
+                    type="button"
+                    onClick={() => handleVersionButtonClick(doc)}
+                    disabled={versioningDocumentId === doc.id}
+                    className="text-xs text-blue-600 hover:underline disabled:opacity-50"
+                  >
+                    Yangi versiya yuklash
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => handleDeleteDocument(doc)}

@@ -385,6 +385,37 @@ async def test_a_document_from_a_sibling_workspace_is_not_readable(
     assert own_get.status_code == 200
 
 
+async def test_a_sibling_workspaces_document_cannot_be_versioned(
+    client: AsyncClient, db_available: bool, knowledge_storage_settings: None
+) -> None:
+    """FR-KNW-009's upload_document_version endpoint uses the same
+    _get_owned_document guard as get/download/delete above — this pins
+    that the new endpoint didn't skip it."""
+    seeded = await _seed_two_workspaces_one_customer()
+
+    uploaded = await client.post(
+        f"/v1/workspaces/{seeded['workspace_b']}/documents",
+        files={"file": ("report.pdf", b"%PDF-1.4\nreal pdf body", "application/pdf")},
+        headers=_auth_headers(seeded["session_b"]),
+    )
+    assert uploaded.status_code == 200
+    document_id = uploaded.json()["id"]
+
+    cross_workspace_version = await client.post(
+        f"/v1/workspaces/{seeded['workspace_a']}/documents/{document_id}/versions",
+        files={"file": ("report-v2.pdf", b"%PDF-1.4\nnew pdf body", "application/pdf")},
+        headers=_auth_headers(seeded["session_a"]),
+    )
+    assert cross_workspace_version.status_code == 404
+
+    # Untouched: still not superseded, since A's attempt never reached it.
+    still_current = await client.get(
+        f"/v1/workspaces/{seeded['workspace_b']}/documents/{document_id}",
+        headers=_auth_headers(seeded["session_b"]),
+    )
+    assert still_current.json()["superseded_by_id"] is None
+
+
 async def test_a_task_cannot_be_linked_to_a_sibling_workspaces_document(
     client: AsyncClient, db_available: bool, knowledge_storage_settings: None
 ) -> None:

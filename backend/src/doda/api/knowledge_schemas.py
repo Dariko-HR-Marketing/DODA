@@ -13,6 +13,10 @@ class DocumentOut(BaseModel):
     size_bytes: int
     sha256: str
     created_at: datetime
+    # FR-KNW-009: None means this is the current version; otherwise the
+    # id of the Document that superseded it (still downloadable, just
+    # excluded from search_knowledge).
+    superseded_by_id: uuid.UUID | None
 
 
 class DocumentChunkOut(BaseModel):

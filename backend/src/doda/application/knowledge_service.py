@@ -34,6 +34,17 @@ from doda.domain.knowledge.text_extraction import extract_text
 from doda.storage.port import ObjectStoragePort
 
 MAX_PAGE_SIZE = 200
+
+
+class DocumentAlreadySupersededError(Exception):
+    """FR-KNW-009: raised by create_document_version when the document a
+    caller is trying to version is itself already superseded — a
+    version chain only ever grows from its own current tip, never from
+    an arbitrary point in its own history (that would leave TWO
+    documents both claiming the same predecessor, and an ambiguous
+    "current" version)."""
+
+
 # How many candidates each leg (keyword, vector) contributes to the
 # fusion step before it trims down to the caller's own `limit` — wider
 # than `limit` so RRF (doda.domain.knowledge.retrieval) actually has
@@ -54,7 +65,7 @@ def _escape_like(term: str) -> str:
     return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-async def ingest_file(
+async def _store_and_record_document(
     session: AsyncSession,
     storage: ObjectStoragePort,
     *,
@@ -90,6 +101,72 @@ async def ingest_file(
     session.add(document)
     await session.flush()
     return document
+
+
+async def ingest_file(
+    session: AsyncSession,
+    storage: ObjectStoragePort,
+    *,
+    customer_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    uploader_id: str,
+    filename: str,
+    declared_content_type: str,
+    data: bytes,
+    max_size_bytes: int,
+) -> Document:
+    return await _store_and_record_document(
+        session,
+        storage,
+        customer_id=customer_id,
+        workspace_id=workspace_id,
+        uploader_id=uploader_id,
+        filename=filename,
+        declared_content_type=declared_content_type,
+        data=data,
+        max_size_bytes=max_size_bytes,
+    )
+
+
+async def create_document_version(
+    session: AsyncSession,
+    storage: ObjectStoragePort,
+    previous_document: Document,
+    *,
+    uploader_id: str,
+    filename: str,
+    declared_content_type: str,
+    data: bytes,
+    max_size_bytes: int,
+) -> Document:
+    """FR-KNW-009: validates and stores `data` as a brand new Document
+    (own id, own storage object — never overwrites `previous_document`'s
+    own file) scoped to the SAME customer/workspace as
+    `previous_document`, then points `previous_document.superseded_by_id`
+    at it. `previous_document` is left otherwise untouched — still
+    downloadable, still has its own chunks — only `search_knowledge`
+    (below) treats it as no longer current. Raises
+    DocumentAlreadySupersededError if `previous_document` is not itself
+    the current tip of its own version chain."""
+    if previous_document.superseded_by_id is not None:
+        raise DocumentAlreadySupersededError(
+            f"document {previous_document.id} has already been superseded "
+            f"by {previous_document.superseded_by_id} — version from the current tip instead"
+        )
+    new_document = await _store_and_record_document(
+        session,
+        storage,
+        customer_id=previous_document.customer_id,
+        workspace_id=previous_document.workspace_id,
+        uploader_id=uploader_id,
+        filename=filename,
+        declared_content_type=declared_content_type,
+        data=data,
+        max_size_bytes=max_size_bytes,
+    )
+    previous_document.superseded_by_id = new_document.id
+    await session.flush()
+    return new_document
 
 
 async def index_document(
@@ -179,7 +256,14 @@ async def search_knowledge(
     if not stripped:
         return []
 
-    filters = [DocumentChunk.workspace_id == workspace_id]
+    # FR-KNW-009: a superseded document's chunks are never deleted (it
+    # stays downloadable), only excluded here — the subquery is shared
+    # by both legs below since it lives in `filters`, applied once via
+    # `.where(*filters, ...)` in each.
+    filters: list[ColumnElement[bool]] = [
+        DocumentChunk.workspace_id == workspace_id,
+        DocumentChunk.document_id.not_in(select(Document.id).where(Document.superseded_by_id.is_not(None))),
+    ]
     if document_id is not None:
         filters.append(DocumentChunk.document_id == document_id)
 

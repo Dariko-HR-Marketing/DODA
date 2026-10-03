@@ -1125,6 +1125,8 @@ export interface DocumentOut {
   size_bytes: number;
   sha256: string;
   created_at: string;
+  // FR-KNW-009: null means this is the current version.
+  superseded_by_id: string | null;
 }
 
 // Not routed through apiFetch: apiFetch always sets Content-Type:
@@ -1142,6 +1144,27 @@ export async function uploadDocument(
     headers: authHeaders(sessionId),
     body,
   });
+  if (!response.ok) {
+    await throwApiError(response);
+  }
+  return (await response.json()) as DocumentOut;
+}
+
+// FR-KNW-009: `documentId` must be the current (not-yet-superseded) tip
+// of its own version chain — same multipart-not-apiFetch reasoning as
+// uploadDocument above.
+export async function uploadDocumentVersion(
+  sessionId: string,
+  workspaceId: string,
+  documentId: string,
+  file: File,
+): Promise<DocumentOut> {
+  const body = new FormData();
+  body.append("file", file);
+  const response = await fetch(
+    `${API_BASE_URL}/v1/workspaces/${workspaceId}/documents/${documentId}/versions`,
+    { method: "POST", headers: authHeaders(sessionId), body },
+  );
   if (!response.ok) {
     await throwApiError(response);
   }

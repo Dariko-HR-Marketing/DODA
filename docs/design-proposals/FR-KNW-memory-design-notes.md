@@ -20,7 +20,7 @@ qondirmaydi — bu hujjat har bir ID'ni alohida, TRD'ning o'z matniga
 | FR-KNW-006 | — | **Qurildi** — unconditional `GROUNDEDNESS_INSTRUCTION` har bir burilishga qo'shiladi, real Gemini'ga qarshi uch stsenariyli eval bilan isbotlandi (`backend/scripts/groundedness_eval.py`). Pastga qarang. |
 | FR-KNW-007 / FR-CTL-004 | C (qisman A) | "Preference" xotira turi allaqachon boshqa ID'lar ostida qurilgan; qolgan to'rt turi (Working/Episodic/Semantic/Sensitive) yangi PO qarori kerak |
 | FR-KNW-008 | C | Asinxron ingest+progress — 002'ning SINXRON versiyasi qurilgandan keyin ham, bu hamon alohida ish (job-queue infratuzilmasi, FR-KNW-002'ning o'z docstring'ida ochiq qoldirilgan) |
-| FR-KNW-009 | C | Versiyalash DB darajasida mustaqil qurilishi mumkin, lekin "retrieval'dan chiqarish" 003'ning o'z mexanizmini talab qiladi — 003 endi qurilgan, lekin versiyalashning o'zi (DocumentChunk bir nechta versiyasi) hali yo'q |
+| FR-KNW-009 | — | **Qurildi** — `Document.superseded_by_id` orqali versiyalash + `search_knowledge`ning o'z exclusion filtri. Pastga qarang. |
 
 Toifalar FR-ADM design-proposal hujjatining o'zi bilan bir xil: (A)
 allaqachon mavjud, faqat ID bilan bog'lash kerak edi; (B) mavjud
@@ -126,16 +126,24 @@ qism.
 
 ## Umumiy xulosa
 
-To'qqizta FR-KNW ID'idan ikkitasi (001, 002) qurilgan; 005 qisman,
-tasodifan (002'ning CASCADE xatti-harakati orqali) yopilgan. Qolgan
-to'rttasi (003/004/006/009) endi YANGI, torroq blokerga (eval to'plami +
-reranking dizayni, FR-KNW-003) bog'liq — avvalgi "real embedding
-chaqiruvi yo'q" blokeri endi mavjud emas. FR-KNW-008 (asinxron ingest)
-alohida, job-queue infratuzilmasi talab qiladigan ish bo'lib qoladi.
-FR-KNW-007/FR-CTL-004 (memory) — beshta turdan bittasi (Preference)
-allaqachon boshqa ID'lar ostida qondirilgan, qolgan to'rttasi ham
-yuqoridagi retrieval blokeri bilan (Episodic/Semantic) yoki yangi,
-alohida Product Owner qaroriga (Sensitive consent modeli) bog'liq.
+**Eslatma — bu bo'lim CLAUDE.md'da bir necha marta hujjatlashtirilgan
+"current-state hujjat faqat yangi yozuv qo'shilganda emas, davriy ravishda
+qayta o'qilishi kerak" darsining o'z nusxasi edi**: quyidagi paragraf
+FR-KNW-003/005/006/009 hali qurilmagan vaqtda yozilgan, keyinchalik
+to'rttasi ham qurilganda bu paragrafning o'zi qaytib yangilanmay qolgan
+edi — yuqoridagi jadval to'g'ri, faqat shu paragraf eskirgan edi. Endi
+to'g'rilandi.
+
+To'qqizta FR-KNW ID'idan oltitasi (001, 002, 003, 005, 006, 009) qurilgan.
+Qolgan uchtasidan FR-KNW-004 (citation-required rejim) endi blokersiz —
+003'ning o'z retrieval mexanizmi (document_id + chunk lineage) allaqachon
+citation locator uchun kerakli ma'lumotni beradi, faqat UI/format qismi
+hali qurilmagan. FR-KNW-008 (asinxron ingest) alohida, job-queue
+infratuzilmasi talab qiladigan ish bo'lib qoladi. FR-KNW-007/FR-CTL-004
+(memory) — beshta turdan bittasi (Preference) allaqachon boshqa ID'lar
+ostida qondirilgan, qolgan to'rttasi (Working/Episodic/Semantic/Sensitive)
+yangi Product Owner qaroriga bog'liq (Sensitive consent modeli — eng
+muhimi).
 
 ## FR-KNW-002: qurilgan holat (texnik tafsilot)
 
@@ -420,3 +428,113 @@ muammoni ko'rsatganini avval tasdiqlab, keyin bu konfiguratsiya
 yechimi alohida, tezroq `mypy scripts` chaqiruvi uchun ham xuddi shunday
 ishlashi tasdiqlandi) — `run_ai_eval_suite.py`ning o'zi ham to'g'ri
 `actor_kind=ActorKind.HUMAN` bilan tuzatildi.
+
+## FR-KNW-009: qurilgan holat (texnik tafsilot)
+
+Qabul mezoni — "Superseded versiya javobda manba sifatida ishlatilmaydi"
+— ikki qismdan iborat: (1) versiyalash mexanizmining o'zi, (2) retrieval'dan
+chiqarish. `domain.knowledge.models.Document`ning o'z docstring'i
+FR-KNW-002 qurilishidan beri "version_id hali modellanmagan" deb ochiq
+yozgan edi — bu safar yopildi.
+
+Versiyalash **alohida `version`/`version_id` ustun yoki "lineage" qatori
+sifatida emas**, balki `Document.superseded_by_id` — o'z-o'ziga
+bog'langan, nullable FK (migratsiya 0030, `ondelete="SET NULL"`) — orqali
+modellandi: `NULL` = "bu joriy versiya", qiymat = "meni ALMASHTIRGAN
+Document'ning id'si". `application.knowledge_service.create_document_
+version` — `ingest_file`ning aynan bir xil validate+store+record
+bosqichini (endi `_store_and_record_document`ga chiqarilgan, ikkalasi ham
+shuni chaqiradi) qayta ishlatib, YANGI, mustaqil Document qatori (o'z
+id'si, o'z storage obyekti — ESKI faylni HECH QACHON ustiga yozmaydi)
+yaratadi, so'ng eski Document'ning `superseded_by_id`sini unga
+yo'naltiradi. Eski Document **o'chirilmaydi** — FR-KNW-005'ning o'z
+o'chirish semantikasi butunlay daxlsiz qoladi, hamon yuklab olish mumkin
+(`download_document` o'zgarishsiz) — faqat `search_knowledge` uni endi
+manba sifatida ko'rmaydi. Allaqachon superseded bo'lgan Document'ni
+qayta versiyalashga urinish (versiya zanjirining faqat O'Z UCHIDAN
+o'sishi kerak, aks holda ikkita Document bitta "current" deb da'vo
+qilgan, noaniq holat paydo bo'lar edi) yangi `DocumentAlreadySupersededError`
+→ 409 `DOCUMENT_ALREADY_SUPERSEDED` bilan rad etiladi.
+
+`search_knowledge`ning o'zgarishi minimal: bitta qo'shimcha subquery-asosli
+filtr (`DocumentChunk.document_id.not_in(select(Document.id).where(
+Document.superseded_by_id.is_not(None)))`) `filters` ro'yxatiga qo'shildi
+— bu ro'yxat ikkala leg (keyword, vector) tomonidan ham `.where(*filters,
+...)` orqali baham ko'rilgani uchun ikkalasi ham avtomatik ravishda
+superseded chunk'larni chiqarib tashlaydi, alohida ikkinchi o'zgarish
+shart emas edi.
+
+`POST /v1/workspaces/{id}/documents/{document_id}/versions` — `upload_
+document`bilan bir xil authz/validatsiya/indekslash zanjiri, faqat
+`document_id`ning joriy versiya ekanini (`_get_owned_document` orqali
+workspace tekshiruvi + `create_document_version`ning o'z supersede-check'i
+orqali) talab qiladi. `DocumentOut`ga `superseded_by_id` maydoni
+qo'shildi — frontend buni "Almashtirilgan" belgisi sifatida ko'rsatadi.
+
+Audit-zanjiri uslubida isbotlandi: `search_knowledge`ning yangi exclusion
+filtrini vaqtincha olib tashlab, yangi `test_a_new_version_supersedes_
+the_old_one_which_stays_downloadable` aynan kutilgan tarzda (superseded
+Document'ning o'z chunk'i qidiruv natijasida qaytib) muvaffaqiyatsiz
+bo'lishi ko'rsatildi, keyin qaytarib (`diff` bilan 0 farq tasdiqlab)
+yashil ekani ko'rsatildi. Testning o'zini yozishda bitta amaliy xato
+topildi va tuzatildi: dastlabki versiya ikkita hujjat kontentida umumiy
+so'z ("marker") ishlatgan edi — `_FakeEmbeddingPort`ning o'zi (pozitsiya-
+asosli, kontentdan mustaqil embedding qaytaradi) superseded bo'lmagan
+yagona qolgan chunk'ni SO'ROVNING KONTENTIDAN qat'i nazar har doim vektor
+leg orqali qaytarardi, bu esa "bo'sh natija" assertioniga ishonib bo'lmasligini
+ko'rsatdi — assertion "superseded document_id hech qachon ko'rinmaydi"ga
+(kengroq, lekin to'g'ri mezon) o'zgartirildi, bu fake-embedding stub'ning
+o'ziga xos cheklovi, `search_knowledge`ning haqiqiy xatosi emas.
+
+Yangi `test_a_sibling_workspaces_document_cannot_be_versioned`
+(`test_cross_workspace_record_access.py`) — yangi endpoint ham mavjud
+`_get_owned_document` guard'idan foydalanganini tasdiqlaydi (bir xil
+customer, boshqa workspace'ning hujjatini versiyalashga urinish → 404).
+
+**Frontend**: "Fayllar" bo'limidagi har bir joriy (superseded bo'lmagan)
+hujjat qatoriga "Yangi versiya yuklash" tugmasi qo'shildi (bitta,
+umumiy, yashirin `<input type="file">`ga yo'naltirilgan — ro'yxat
+dinamik render qilingani uchun har qator uchun alohida ref shart emas),
+superseded hujjatlar esa "Almashtirilgan" belgisi bilan ko'rsatiladi va
+o'z "Yangi versiya yuklash" tugmasini yo'qotadi (backend'ning
+DocumentAlreadySupersededError'ini aks ettiradi). Yangi E2E test
+(`knowledge.spec.ts`) to'liq oqimni (v1 yuklash → versiyalash → badge
+ko'rinishi → tugma yo'qolishi → v1 hamon o'z asl baytlari bilan yuklab
+olinishi → ikkalasini ham tozalash) real backend+production frontend'ga
+qarshi tasdiqladi.
+
+**Tekshiruv jarayonida ikkita, aloqasiz muhit-drift topilmasi aniqlandi
+(FR-KNW-009'ning o'zi tomonidan yaratilmagan, mavjud bo'shliqning yangi
+ko'rinishlari)**: to'liq E2E suite'ni ishga tushirishda `knowledge.
+spec.ts`ning ESKI FR-KNW-001 testi va `task-attachments.spec.ts`ning
+o'z testi — ikkalasi ham sintetik, faqat magic-byte header'ga ega
+"PDF" fixture ishlatadi — bu sandbox'ning `.env`ida endi HAQIQIY Gemini
+kaliti borligi sababli (bu `.env` CI'dan farq qiladi, CI hech qachon
+embedding kaliti o'rnatmaydi) `extract_text`ning haqiqiy `PdfStreamError`
+bilan butun yuklashni bekor qilishiga olib keladi — bu FR-KNW-003'ning
+o'z yozuvida ALLAQACHON "Halol, ochiq qoldirilgan topilma" sifatida
+hujjatlashtirilgan, bu PR doirasidan tashqarida qoldirilgan muammo.
+Bu safar UCHINCHI, yangi ko'rinishi ham topildi: `chat.spec.ts`ning
+birinchi testi "NullModelGateway reply" degan aniq matnni kutadi, lekin
+endi real Gemini kaliti konfiguratsiya qilingani uchun chat haqiqiy
+Gemini javobini qaytaradi — bu ham bir xil ildiz sabab (sandbox `.env`i
+CI'dan farq qiladi), yangi topilma sifatida shu yerda qayd etilmoqda,
+lekin FR-KNW-009'ning o'z diff doirasidan tashqarida bo'lgani uchun
+TUZATILMADI (minimal-diff qoidasi — bu `chat.spec.ts`ning o'z muammosi,
+FR-KNW-009 bilan aloqasi yo'q). Har uchala holat ham **baseline'da
+(mening o'zgarishlarimdan OLDIN, `git stash` bilan tasdiqlangan) AYNAN
+bir xil tarzda muvaffaqiyatsiz bo'lishi** bilan isbotlandi — bu FR-KNW-009
+keltirib chiqargan regressiya emasligini tasdiqlaydi. Bitta toza,
+to'liq E2E ishga tushirishda: 10 ta test to'liq o'tdi, 3 tasi shu
+pre-existing sabab bilan muvaffaqiyatsiz bo'ldi, 5 tasi shu fayllarning
+`test.describe.configure({mode:"serial"})`i tufayli (knowledge.spec.ts'da
+MENING FR-KNW-009 testim ham shu jumladan) ishga tushmadi — lekin
+FR-KNW-009'ning o'z testi mustaqil, izolyatsiyalangan holda (`--grep`
+bilan, ikki marta, fresh seed bilan) ishga tushirilganda izchil yashil
+ekani alohida tasdiqlandi.
+
+655 test (652 + 3: 2 integration — `test_knowledge_api.py`, 1 — `test_
+cross_workspace_record_access.py`), barchasi real Postgres'da; `ruff`/
+`mypy src/doda`/`mypy scripts` toza; frontend `tsc`/ESLint toza,
+production build muvaffaqiyatli. Migratsiya round-trip (0029→0030→
+0029→0030) qo'lda tekshirildi.

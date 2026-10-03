@@ -537,3 +537,111 @@ async def test_deleting_a_document_makes_it_unsearchable_and_removes_its_blob(
     assert found_after.json() == []
 
     assert [p for p in tmp_path.rglob("*") if p.is_file()] == []
+
+
+async def test_a_new_version_supersedes_the_old_one_which_stays_downloadable(
+    client: AsyncClient,
+    db_available: bool,
+    storage_settings: Settings,
+    fake_embedding: _FakeEmbeddingPort,
+) -> None:
+    """FR-KNW-009's own acceptance criterion, both halves, over real
+    HTTP: the superseded version's content is no longer used as a
+    retrieval source, but it is NOT deleted — still downloadable, DB row
+    intact — only search_knowledge excludes it."""
+    member = await seed_workspace_member()
+    # Deliberately no shared words between the two (the keyword leg
+    # matches per-word — see search_knowledge's own docstring — so a
+    # shared word like "marker" in both would make this test pass for
+    # the wrong reason: a coincidental hit on the surviving document
+    # rather than genuine exclusion of the superseded one).
+    old_marker = "zxq19283"
+    new_marker = "wpl84732"
+
+    v1 = await client.post(
+        f"/v1/workspaces/{member.workspace_id}/documents",
+        files=_upload_files("policy.txt", "text/plain", f"policy text with {old_marker}".encode()),
+        headers=_auth_headers(member.session_id),
+    )
+    assert v1.status_code == 200
+    v1_id = v1.json()["id"]
+    assert v1.json()["superseded_by_id"] is None
+
+    found_before = await client.get(
+        f"/v1/workspaces/{member.workspace_id}/documents/search",
+        params={"q": old_marker},
+        headers=_auth_headers(member.session_id),
+    )
+    assert {chunk["document_id"] for chunk in found_before.json()} == {v1_id}
+
+    v2 = await client.post(
+        f"/v1/workspaces/{member.workspace_id}/documents/{v1_id}/versions",
+        files=_upload_files("policy-v2.txt", "text/plain", f"policy text with {new_marker}".encode()),
+        headers=_auth_headers(member.session_id),
+    )
+    assert v2.status_code == 200
+    v2_id = v2.json()["id"]
+    assert v2_id != v1_id
+    assert v2.json()["superseded_by_id"] is None
+
+    v1_after = await client.get(
+        f"/v1/workspaces/{member.workspace_id}/documents/{v1_id}",
+        headers=_auth_headers(member.session_id),
+    )
+    assert v1_after.json()["superseded_by_id"] == v2_id
+
+    found_old_after = await client.get(
+        f"/v1/workspaces/{member.workspace_id}/documents/search",
+        params={"q": old_marker},
+        headers=_auth_headers(member.session_id),
+    )
+    # NOT asserting an empty result: _FakeEmbeddingPort's embeddings are
+    # position-indexed, not content-aware (see its own docstring), so
+    # once v1's chunk is excluded, the vector leg's lone remaining
+    # candidate (v2's chunk) can surface regardless of query text — a
+    # property of this test double, not of search_knowledge itself. The
+    # actual acceptance criterion this proves is that v1_id — the
+    # SUPERSEDED document — never appears again, which the keyword leg
+    # alone (unique, non-overlapping markers, see above) already
+    # guarantees it would have if the exclusion filter were missing.
+    assert v1_id not in {chunk["document_id"] for chunk in found_old_after.json()}
+
+    found_new_after = await client.get(
+        f"/v1/workspaces/{member.workspace_id}/documents/search",
+        params={"q": new_marker},
+        headers=_auth_headers(member.session_id),
+    )
+    assert {chunk["document_id"] for chunk in found_new_after.json()} == {v2_id}
+
+    download_v1 = await client.get(
+        f"/v1/workspaces/{member.workspace_id}/documents/{v1_id}/content",
+        headers=_auth_headers(member.session_id),
+    )
+    assert download_v1.status_code == 200
+    assert old_marker.encode() in download_v1.content
+
+
+async def test_versioning_an_already_superseded_document_is_rejected(
+    client: AsyncClient, db_available: bool, storage_settings: Settings, fake_embedding: _FakeEmbeddingPort
+) -> None:
+    member = await seed_workspace_member()
+    v1 = await client.post(
+        f"/v1/workspaces/{member.workspace_id}/documents",
+        files=_upload_files("a.txt", "text/plain", b"v1 content"),
+        headers=_auth_headers(member.session_id),
+    )
+    v1_id = v1.json()["id"]
+    v2 = await client.post(
+        f"/v1/workspaces/{member.workspace_id}/documents/{v1_id}/versions",
+        files=_upload_files("b.txt", "text/plain", b"v2 content"),
+        headers=_auth_headers(member.session_id),
+    )
+    assert v2.status_code == 200
+
+    v3_from_v1 = await client.post(
+        f"/v1/workspaces/{member.workspace_id}/documents/{v1_id}/versions",
+        files=_upload_files("c.txt", "text/plain", b"v3 content"),
+        headers=_auth_headers(member.session_id),
+    )
+    assert v3_from_v1.status_code == 409
+    assert v3_from_v1.json()["code"] == "DOCUMENT_ALREADY_SUPERSEDED"

@@ -9666,3 +9666,97 @@ ishlashi tasdiqlandi) — `run_ai_eval_suite.py`ning o'zi ham to'g'ri
 
 652 test, barchasi real Postgres(+Redis)'da; `ruff`/`mypy src/doda`/
 `mypy scripts` toza.
+
+**FR-KNW-009 (hujjat versiyalanishi va eskirgan versiyani retrieval'dan
+chiqarish, Must) qurildi — FR-KNW-002'ning o'z `Document` modeli
+docstring'ida ancha oldin ochiq qoldirilgan "version_id hali
+modellanmagan" bo'shlig'i, va `docs/design-proposals/FR-KNW-memory-
+design-notes.md`ning o'zi FR-KNW-003 qurilgandan keyin yangi blokersiz
+deb qayta baholagan ID.** Qabul mezoni — "Superseded versiya javobda
+manba sifatida ishlatilmaydi" — sof deterministik ish, hech qanday
+yangi Product Owner qarori yoki tashqi bog'liqlik talab qilmaydi.
+
+Versiyalash **alohida `version`/`version_id` ustun sifatida emas**,
+balki `Document.superseded_by_id` — o'z-o'ziga bog'langan, nullable FK
+(0030-migratsiya, `ondelete="SET NULL"` — yangi versiya o'chirilsa eski
+versiya yana "joriy" bo'lib qoladi, osilib qolgan pointer yoki orqaga
+cascade emas) — orqali modellandi: `NULL` = joriy versiya. `application.
+knowledge_service.create_document_version` — `ingest_file`ning aynan
+bir xil validate+store+record bosqichini (`_store_and_record_document`ga
+chiqarilgan, ikkalasi ham shuni chaqiradi) qayta ishlatib, YANGI,
+mustaqil Document qatori (o'z id'si, o'z storage obyekti — eski faylni
+HECH QACHON ustiga yozmaydi) yaratadi, so'ng eski Document'ning
+`superseded_by_id`sini unga yo'naltiradi. Eski Document **o'chirilmaydi**
+— FR-KNW-005'ning o'z semantikasi daxlsiz, hamon yuklab olinadi, faqat
+`search_knowledge` uni endi manba sifatida ko'rmaydi. Zanjirning faqat
+O'Z UCHIDAN o'sishi majburlandi — allaqachon superseded Document'ni
+qayta versiyalashga urinish yangi `DocumentAlreadySupersededError` →
+409 `DOCUMENT_ALREADY_SUPERSEDED` bilan rad etiladi (aks holda ikkita
+Document bitta "joriy" deb da'vo qilgan, noaniq holat paydo bo'lardi).
+
+`search_knowledge`ning o'zgarishi minimal: bitta subquery-asosli filtr
+(`DocumentChunk.document_id.not_in(select(Document.id).where(Document.
+superseded_by_id.is_not(None)))`) ikkala leg (keyword, vector) tomonidan
+baham ko'riladigan `filters` ro'yxatiga qo'shildi — ikkalasi ham
+avtomatik ravishda superseded chunk'larni chiqarib tashlaydi, alohida
+ikkinchi o'zgarish shart emas edi. `POST /v1/workspaces/{id}/documents/
+{document_id}/versions` — `upload_document`bilan bir xil authz/
+validatsiya/indekslash zanjiri. `DocumentOut`ga `superseded_by_id`
+maydoni qo'shildi.
+
+Audit-zanjiri uslubida isbotlandi: exclusion filtrini vaqtincha olib
+tashlab, yangi `test_a_new_version_supersedes_the_old_one_which_stays_
+downloadable` aynan kutilgan tarzda muvaffaqiyatsiz bo'lishi ko'rsatildi,
+keyin qaytarib (`diff` bilan 0 farq tasdiqlab) yashil ekani ko'rsatildi.
+Testni yozishda bitta amaliy xato topildi va tuzatildi: dastlabki versiya
+ikkita hujjat kontentida umumiy so'z ("marker") ishlatgan edi —
+`_FakeEmbeddingPort` (pozitsiya-asosli, kontentdan mustaqil embedding
+qaytaradi) superseded bo'lmagan yagona qolgan chunk'ni so'rov kontentidan
+qat'i nazar har doim vektor leg orqali qaytarardi, bu esa "bo'sh natija"
+assertioniga ishonib bo'lmasligini ko'rsatdi — assertion "superseded
+document_id hech qachon ko'rinmaydi"ga (to'g'ri, kengroq mezon)
+o'zgartirildi, fake-embedding stub'ning o'ziga xos cheklovi, `search_
+knowledge`ning haqiqiy xatosi emas. Yangi `test_a_sibling_workspaces_
+document_cannot_be_versioned` (`test_cross_workspace_record_access.py`)
+— yangi endpoint ham mavjud `_get_owned_document` guard'idan
+foydalanganini tasdiqladi.
+
+Frontend: "Fayllar" bo'limidagi har bir joriy hujjat qatoriga "Yangi
+versiya yuklash" tugmasi (bitta, umumiy yashirin `<input type="file">`ga
+yo'naltirilgan), superseded hujjatlar esa "Almashtirilgan" belgisi bilan
+ko'rsatiladi va o'z tugmasini yo'qotadi. Yangi E2E test to'liq oqimni
+(yuklash → versiyalash → badge → tugma yo'qolishi → eski versiya hamon
+asl baytlari bilan yuklab olinishi → tozalash) real backend+production
+frontend'ga qarshi tasdiqladi — mustaqil ishga tushirilganda (`--grep`,
+fresh seed, ikki marta) izchil yashil.
+
+**Tekshiruv jarayonida ikkita, FR-KNW-009'ning o'zi yaratmagan muhit-drift
+topilmasi aniqlandi/tasdiqlandi.** To'liq E2E suite'ni ishga tushirishda
+`knowledge.spec.ts`ning ESKI FR-KNW-001 testi va `task-attachments.
+spec.ts`ning o'z testi (ikkalasi ham sintetik, faqat magic-byte header'ga
+ega "PDF" fixture) muvaffaqiyatsiz bo'ldi — bu sandbox'ning `.env`ida
+endi HAQIQIY Gemini kaliti borligi sababli (CI hech qachon embedding
+kaliti o'rnatmaydi, demak bu `.env` CI'dan farq qiladi) `extract_text`
+haqiqiy `PdfStreamError` bilan butun yuklashni bekor qiladi — bu FR-KNW-003
+davrida ALLAQACHON "halol, ochiq qoldirilgan topilma" sifatida
+hujjatlashtirilgan, shu PR doirasidan tashqarida. Bu safar UCHINCHI,
+yangi ko'rinishi topildi: `chat.spec.ts`ning birinchi testi aynan shu
+sababdan ham muvaffaqiyatsiz bo'ladi ("NullModelGateway reply" degan
+matnni kutadi, lekin endi real Gemini javob qaytaradi) — yangi topilma
+sifatida qayd etilmoqda (`docs/design-proposals/FR-KNW-memory-design-
+notes.md`), lekin `chat.spec.ts`ning o'zi FR-KNW-009'ning diff doirasidan
+tashqarida bo'lgani uchun TUZATILMADI. Uchalasi ham `git stash` bilan
+baseline'ga (mening FR-KNW-009 o'zgarishlarimdan OLDIN) qaytarib, AYNAN
+bir xil tarzda muvaffaqiyatsiz bo'lishi bilan isbotlandi — FR-KNW-009
+keltirib chiqargan regressiya emasligi tasdiqlandi. Bitta toza, to'liq
+E2E ishga tushirishda: 10 test o'tdi, 3 tasi shu pre-existing sabab bilan
+muvaffaqiyatsiz bo'ldi, 5 tasi mos fayllarning `test.describe.configure(
+{mode:"serial"})`i tufayli (knowledge.spec.ts'dagi MENING FR-KNW-009
+testim ham shu jumladan) ishga tushmadi — lekin FR-KNW-009'ning o'z testi
+mustaqil, izolyatsiyalangan holda ikki marta, fresh seed bilan ishga
+tushirilganda izchil yashil ekani alohida tasdiqlandi.
+
+655 test, barchasi real Postgres'da; `ruff`/`mypy src/doda`/`mypy
+scripts` toza; frontend `tsc`/ESLint toza, production build
+muvaffaqiyatli. Migratsiya round-trip (0029→0030→0029→0030) qo'lda
+tekshirildi.
