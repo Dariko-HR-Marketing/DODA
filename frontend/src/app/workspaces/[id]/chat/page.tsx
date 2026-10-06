@@ -30,6 +30,18 @@ import {
   type WorkspaceLanguageSettingOut,
 } from "@/lib/api";
 import { useSession } from "@/lib/useSession";
+import {
+  Card,
+  ErrorBanner,
+  actionLinkClass,
+  backLinkClass,
+  compactSecondaryButtonClass,
+  dangerLinkClass,
+  fieldClass,
+  fieldClassCompact,
+  primaryButtonClass,
+  secondaryButtonClass,
+} from "@/components/ui";
 
 const CHAT_MODES: ChatMode[] = ["FAST", "STANDARD", "DEEP"];
 
@@ -388,15 +400,15 @@ export default function ChatPage() {
   if (sessionId === null) return null;
 
   return (
-    <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-6 p-6">
+    <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-5 p-6">
       <div className="flex items-center justify-between">
-        <Link href={`/workspaces/${workspaceId}`} className="text-sm text-gray-500 hover:text-black">
-          &larr; Workspace
+        <Link href={`/workspaces/${workspaceId}`} className={backLinkClass}>
+          <span aria-hidden="true">&larr;</span> Workspace
         </Link>
-        <h1 className="text-lg font-semibold">Chat</h1>
+        <h1 className="text-lg font-semibold text-gray-900 dark:text-gray-50">Chat</h1>
       </div>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <ErrorBanner>{error}</ErrorBanner>}
 
       <form onSubmit={handleSearch} className="flex items-center gap-2">
         <input
@@ -404,137 +416,121 @@ export default function ChatPage() {
           value={searchQuery}
           onChange={(event) => setSearchQuery(event.target.value)}
           placeholder="Suhbat tarixini qidirish..."
-          className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-black focus:outline-none"
+          className={`${fieldClass} flex-1`}
         />
-        <button
-          type="submit"
-          disabled={searching}
-          className="rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 disabled:opacity-50"
-        >
+        <button type="submit" disabled={searching} className={compactSecondaryButtonClass}>
           Qidirish
         </button>
         {searchResults !== null && (
-          <button
-            type="button"
-            onClick={handleClearSearch}
-            className="text-sm text-gray-500 hover:underline"
-          >
+          <button type="button" onClick={handleClearSearch} className={actionLinkClass}>
             Tozalash
           </button>
         )}
       </form>
 
       {searchResults !== null && (
-        <div className="rounded-md border border-gray-200 p-3">
+        <Card className="!p-2">
           {searchResults.length === 0 ? (
-            <p className="text-sm text-gray-500">Hech narsa topilmadi.</p>
+            <p className="px-2 py-1 text-sm text-gray-500 dark:text-gray-400">Hech narsa topilmadi.</p>
           ) : (
-            <ul className="space-y-2">
+            <ul className="space-y-1">
               {searchResults.map((message) => (
                 <li key={message.id}>
                   <button
                     type="button"
                     onClick={() => handleJumpToSearchResult(message.conversation_id)}
-                    className="w-full rounded-md p-2 text-left text-sm hover:bg-gray-50"
+                    className="w-full rounded-lg p-2 text-left text-sm hover:bg-gray-50 dark:hover:bg-gray-800"
                   >
-                    <span className="line-clamp-2 text-gray-800">{message.content}</span>
+                    <span className="line-clamp-2 text-gray-800 dark:text-gray-200">{message.content}</span>
                   </button>
                 </li>
               ))}
             </ul>
           )}
-        </div>
+        </Card>
       )}
 
-      {workspacePreference !== null && (
-        <form onSubmit={handleSetWorkspacePreference} className="flex items-center gap-2 text-xs">
-          <span className="text-gray-500">
-            Workspace standart AI ({workspacePreference.provider ?? "tizim standart"}
-            {workspacePreference.model ? ` / ${workspacePreference.model}` : ""}):
-          </span>
-          <select
-            aria-label="Workspace AI provayderi"
-            value={workspaceProviderChoice}
-            onChange={(event) => setWorkspaceProviderChoice(event.target.value as AiProvider)}
-            className="rounded border border-gray-200 bg-gray-50 px-1 py-1"
-          >
-            {AI_PROVIDERS.map((provider) => (
-              <option key={provider} value={provider}>
-                {provider}
-              </option>
-            ))}
-          </select>
-          <input
-            type="text"
-            value={workspaceModelChoice}
-            onChange={(event) => setWorkspaceModelChoice(event.target.value)}
-            placeholder="model (ixtiyoriy)"
-            className="w-32 rounded border border-gray-200 px-1 py-1"
-          />
-          <button
-            type="submit"
-            disabled={savingWorkspacePreference}
-            className="rounded border border-gray-300 px-2 py-1 font-medium text-gray-700 disabled:opacity-50"
-          >
-            Saqlash
-          </button>
-          {workspacePreference.provider !== null && (
-            <button
-              type="button"
-              onClick={handleClearWorkspacePreference}
-              disabled={savingWorkspacePreference}
-              className="text-red-600 hover:underline disabled:opacity-50"
-            >
-              Tizim standartga qaytarish
-            </button>
+      {(workspacePreference !== null || workspaceLanguageSetting !== null) && (
+        <Card className="flex flex-col gap-3 !p-3 text-xs sm:flex-row sm:items-center sm:gap-6">
+          {workspacePreference !== null && (
+            <form onSubmit={handleSetWorkspacePreference} className="flex flex-wrap items-center gap-2">
+              <span className="text-gray-500 dark:text-gray-400">
+                Workspace standart AI ({workspacePreference.provider ?? "tizim standart"}
+                {workspacePreference.model ? ` / ${workspacePreference.model}` : ""}):
+              </span>
+              <select
+                aria-label="Workspace AI provayderi"
+                value={workspaceProviderChoice}
+                onChange={(event) => setWorkspaceProviderChoice(event.target.value as AiProvider)}
+                className={fieldClassCompact}
+              >
+                {AI_PROVIDERS.map((provider) => (
+                  <option key={provider} value={provider}>
+                    {provider}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="text"
+                value={workspaceModelChoice}
+                onChange={(event) => setWorkspaceModelChoice(event.target.value)}
+                placeholder="model (ixtiyoriy)"
+                className={`${fieldClassCompact} w-32`}
+              />
+              <button type="submit" disabled={savingWorkspacePreference} className={actionLinkClass}>
+                Saqlash
+              </button>
+              {workspacePreference.provider !== null && (
+                <button
+                  type="button"
+                  onClick={handleClearWorkspacePreference}
+                  disabled={savingWorkspacePreference}
+                  className={dangerLinkClass}
+                >
+                  Tizim standartga qaytarish
+                </button>
+              )}
+            </form>
           )}
-        </form>
-      )}
 
-      {workspaceLanguageSetting !== null && (
-        <form onSubmit={handleSetWorkspaceLanguage} className="flex items-center gap-2 text-xs">
-          <span className="text-gray-500">
-            Workspace standart tili ({workspaceLanguageSetting.language ?? "o'rnatilmagan"}):
-          </span>
-          <select
-            aria-label="Workspace standart tili"
-            value={workspaceLanguageChoice}
-            onChange={(event) => setWorkspaceLanguageChoice(event.target.value as AiLanguage)}
-            className="rounded border border-gray-200 bg-gray-50 px-1 py-1"
-          >
-            {AI_LANGUAGES.map((language) => (
-              <option key={language} value={language}>
-                {language}
-              </option>
-            ))}
-          </select>
-          <button
-            type="submit"
-            disabled={savingWorkspaceLanguage}
-            className="rounded border border-gray-300 px-2 py-1 font-medium text-gray-700 disabled:opacity-50"
-          >
-            Saqlash
-          </button>
-          {workspaceLanguageSetting.language !== null && (
-            <button
-              type="button"
-              onClick={handleClearWorkspaceLanguage}
-              disabled={savingWorkspaceLanguage}
-              className="text-red-600 hover:underline disabled:opacity-50"
-            >
-              O&apos;rnatilmagan holatga qaytarish
-            </button>
+          {workspaceLanguageSetting !== null && (
+            <form onSubmit={handleSetWorkspaceLanguage} className="flex flex-wrap items-center gap-2">
+              <span className="text-gray-500 dark:text-gray-400">
+                Workspace standart tili ({workspaceLanguageSetting.language ?? "o'rnatilmagan"}):
+              </span>
+              <select
+                aria-label="Workspace standart tili"
+                value={workspaceLanguageChoice}
+                onChange={(event) => setWorkspaceLanguageChoice(event.target.value as AiLanguage)}
+                className={fieldClassCompact}
+              >
+                {AI_LANGUAGES.map((language) => (
+                  <option key={language} value={language}>
+                    {language}
+                  </option>
+                ))}
+              </select>
+              <button type="submit" disabled={savingWorkspaceLanguage} className={actionLinkClass}>
+                Saqlash
+              </button>
+              {workspaceLanguageSetting.language !== null && (
+                <button
+                  type="button"
+                  onClick={handleClearWorkspaceLanguage}
+                  disabled={savingWorkspaceLanguage}
+                  className={dangerLinkClass}
+                >
+                  O&apos;rnatilmagan holatga qaytarish
+                </button>
+              )}
+            </form>
           )}
-        </form>
+        </Card>
       )}
 
-      <div className="flex gap-6">
-        <aside className="w-48 shrink-0 space-y-2">
-          <button
-            onClick={handleNewConversation}
-            disabled={creatingConversation}
-            className="w-full rounded-md bg-black px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
-          >
+      <div className="flex min-h-0 flex-1 gap-6">
+        <aside className="w-52 shrink-0 space-y-3">
+          <button onClick={handleNewConversation} disabled={creatingConversation} className={`${primaryButtonClass} w-full`}>
             Yangi suhbat
           </button>
           <ul className="space-y-1">
@@ -542,8 +538,10 @@ export default function ChatPage() {
               <li key={conversation.id} className="flex items-center gap-1">
                 <button
                   onClick={() => setSelectedId(conversation.id)}
-                  className={`min-w-0 flex-1 truncate rounded-md px-2 py-1.5 text-left text-sm ${
-                    conversation.id === selectedId ? "bg-gray-100 font-medium" : "text-gray-600 hover:bg-gray-50"
+                  className={`min-w-0 flex-1 truncate rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors ${
+                    conversation.id === selectedId
+                      ? "bg-gray-900 font-medium text-white dark:bg-gray-100 dark:text-gray-900"
+                      : "text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800"
                   }`}
                 >
                   {conversation.title ?? "Suhbat"}
@@ -553,112 +551,107 @@ export default function ChatPage() {
                   disabled={deletingConversation}
                   aria-label="Suhbatni o'chirish"
                   title="Suhbatni o'chirish"
-                  className="shrink-0 rounded-md px-1.5 py-1 text-xs text-gray-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                  className="shrink-0 rounded-md px-1.5 py-1 text-xs text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50 dark:text-gray-500 dark:hover:bg-red-950/40 dark:hover:text-red-400"
                 >
                   ✕
                 </button>
               </li>
             ))}
             {conversations !== null && conversations.length === 0 && (
-              <li className="text-xs text-gray-500">Hali suhbat yo&apos;q.</li>
+              <li className="px-1 text-xs text-gray-500 dark:text-gray-400">Hali suhbat yo&apos;q.</li>
             )}
           </ul>
         </aside>
 
-        <section className="flex flex-1 flex-col gap-4">
+        <section className="flex min-h-0 flex-1 flex-col gap-4">
           {selected === null ? (
-            <p className="text-sm text-gray-500">Suhbat tanlang yoki yangisini yarating.</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              Suhbat tanlang yoki yangisini yarating.
+            </p>
           ) : (
             <>
-              <form onSubmit={handlePinProvider} className="flex items-center gap-2 text-xs">
-                <span className="text-gray-500">Provayder:</span>
-                <select
-                  aria-label="Suhbat provayderi"
-                  value={pinProvider}
-                  onChange={(event) => setPinProvider(event.target.value as AiProvider)}
-                  className="rounded border border-gray-200 bg-gray-50 px-1 py-1"
-                >
-                  {AI_PROVIDERS.map((provider) => (
-                    <option key={provider} value={provider}>
-                      {provider}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  type="text"
-                  value={pinModel}
-                  onChange={(event) => setPinModel(event.target.value)}
-                  placeholder="model (ixtiyoriy)"
-                  className="w-36 rounded border border-gray-200 px-1 py-1"
-                />
-                <button
-                  type="submit"
-                  disabled={pinning}
-                  className="rounded border border-gray-300 px-2 py-1 font-medium text-gray-700 disabled:opacity-50"
-                >
-                  Pin qilish
-                </button>
-                <span className="text-gray-400">
-                  {selected.pinned_provider
-                    ? `hozirgi: ${selected.pinned_provider}${selected.pinned_model ? " / " + selected.pinned_model : ""}`
-                    : "hozirgi: tizim standart"}
-                </span>
-              </form>
-
-              <form onSubmit={handlePinLanguage} className="flex items-center gap-2 text-xs">
-                <span className="text-gray-500">Til:</span>
-                <select
-                  aria-label="Suhbat tili"
-                  value={pinLanguage}
-                  onChange={(event) => setPinLanguage(event.target.value as AiLanguage)}
-                  className="rounded border border-gray-200 bg-gray-50 px-1 py-1"
-                >
-                  {AI_LANGUAGES.map((language) => (
-                    <option key={language} value={language}>
-                      {language}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="submit"
-                  disabled={pinningLanguage}
-                  className="rounded border border-gray-300 px-2 py-1 font-medium text-gray-700 disabled:opacity-50"
-                >
-                  Pin qilish
-                </button>
-                <span className="text-gray-400">
-                  {selected.pinned_language ? `hozirgi: ${selected.pinned_language}` : "hozirgi: avtomatik aniqlash"}
-                </span>
-                {selected.pinned_language !== null && (
-                  <button
-                    type="button"
-                    onClick={handleClearPinnedLanguage}
-                    disabled={pinningLanguage}
-                    className="text-red-600 hover:underline disabled:opacity-50"
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+                <form onSubmit={handlePinProvider} className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="text-gray-500 dark:text-gray-400">Provayder:</span>
+                  <select
+                    aria-label="Suhbat provayderi"
+                    value={pinProvider}
+                    onChange={(event) => setPinProvider(event.target.value as AiProvider)}
+                    className={fieldClassCompact}
                   >
-                    Avtomatikka qaytarish
+                    {AI_PROVIDERS.map((provider) => (
+                      <option key={provider} value={provider}>
+                        {provider}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="text"
+                    value={pinModel}
+                    onChange={(event) => setPinModel(event.target.value)}
+                    placeholder="model (ixtiyoriy)"
+                    className={`${fieldClassCompact} w-32`}
+                  />
+                  <button type="submit" disabled={pinning} className={actionLinkClass}>
+                    Pin qilish
                   </button>
-                )}
-              </form>
+                  <span className="text-gray-500 dark:text-gray-500">
+                    {selected.pinned_provider
+                      ? `hozirgi: ${selected.pinned_provider}${selected.pinned_model ? " / " + selected.pinned_model : ""}`
+                      : "hozirgi: tizim standart"}
+                  </span>
+                </form>
 
-              <div className="flex-1 space-y-3 overflow-y-auto rounded-md border border-gray-200 p-4">
-                {messages?.map((message) => (
-                  <div
-                    key={message.id}
-                    className={message.role === "USER" ? "text-right" : "text-left"}
+                <form onSubmit={handlePinLanguage} className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="text-gray-500 dark:text-gray-400">Til:</span>
+                  <select
+                    aria-label="Suhbat tili"
+                    value={pinLanguage}
+                    onChange={(event) => setPinLanguage(event.target.value as AiLanguage)}
+                    className={fieldClassCompact}
                   >
+                    {AI_LANGUAGES.map((language) => (
+                      <option key={language} value={language}>
+                        {language}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="submit" disabled={pinningLanguage} className={actionLinkClass}>
+                    Pin qilish
+                  </button>
+                  <span className="text-gray-500 dark:text-gray-500">
+                    {selected.pinned_language
+                      ? `hozirgi: ${selected.pinned_language}`
+                      : "hozirgi: avtomatik aniqlash"}
+                  </span>
+                  {selected.pinned_language !== null && (
+                    <button
+                      type="button"
+                      onClick={handleClearPinnedLanguage}
+                      disabled={pinningLanguage}
+                      className={dangerLinkClass}
+                    >
+                      Avtomatikka qaytarish
+                    </button>
+                  )}
+                </form>
+              </div>
+
+              <div className="flex-1 space-y-3 overflow-y-auto rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-950/40">
+                {messages?.map((message) => (
+                  <div key={message.id} className={message.role === "USER" ? "text-right" : "text-left"}>
                     <div
-                      className={`inline-block max-w-[80%] rounded-md px-3 py-2 text-sm ${
+                      className={`inline-block max-w-[80%] rounded-xl px-3 py-2 text-sm ${
                         message.role === "USER"
-                          ? "bg-black text-white"
+                          ? "bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900"
                           : message.role === "TOOL"
-                            ? "bg-gray-50 text-gray-500 italic"
-                            : "bg-gray-100 text-gray-900"
+                            ? "bg-gray-50 text-gray-500 italic dark:bg-gray-900 dark:text-gray-400"
+                            : "bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100"
                       }`}
                     >
                       {message.content}
                       {message.role === "ASSISTANT" && message.provider && (
-                        <div className="mt-1 text-xs text-gray-400">
+                        <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                           {message.provider}
                           {message.model ? ` / ${message.model}` : ""}
                         </div>
@@ -669,7 +662,7 @@ export default function ChatPage() {
                         <button
                           type="button"
                           onClick={() => handleStartEdit(message)}
-                          className="text-xs text-gray-400 hover:text-black hover:underline"
+                          className="text-xs text-gray-500 hover:text-gray-900 hover:underline dark:text-gray-400 dark:hover:text-gray-100"
                         >
                           Tahrirlash
                         </button>
@@ -679,36 +672,38 @@ export default function ChatPage() {
                 ))}
                 {pendingUserText !== null && (
                   <div className="text-right">
-                    <div className="inline-block max-w-[80%] rounded-md bg-black px-3 py-2 text-sm text-white">
+                    <div className="inline-block max-w-[80%] rounded-xl bg-gray-900 px-3 py-2 text-sm text-white dark:bg-gray-100 dark:text-gray-900">
                       {pendingUserText}
                     </div>
                   </div>
                 )}
                 {streamingText !== null && (
                   <div className="text-left">
-                    <div className="inline-block max-w-[80%] rounded-md bg-gray-100 px-3 py-2 text-sm text-gray-900">
+                    <div className="inline-block max-w-[80%] rounded-xl bg-gray-100 px-3 py-2 text-sm text-gray-900 dark:bg-gray-800 dark:text-gray-100">
                       {streamingText.length > 0 ? streamingText : "..."}
                     </div>
                   </div>
                 )}
                 {messages !== null && messages.length === 0 && pendingUserText === null && (
-                  <p className="text-sm text-gray-500">Hali xabar yo&apos;q. Suhbatni boshlang.</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                    Hali xabar yo&apos;q. Suhbatni boshlang.
+                  </p>
                 )}
                 <div ref={bottomRef} />
               </div>
 
               {editingMessageId !== null && (
-                <p className="text-xs text-gray-500">
+                <p className="text-xs text-gray-500 dark:text-gray-400">
                   Oxirgi xabaringizni tahrirlayapsiz — yuborilganda yangi javob generatsiya qilinadi,
                   eskisi o&apos;chirilmaydi.
                 </p>
               )}
-              <form onSubmit={handleSend} className="flex gap-2">
+              <form onSubmit={handleSend} className="flex flex-wrap gap-2">
                 <select
                   aria-label="Chat rejimi"
                   value={mode}
                   onChange={(event) => setMode(event.target.value as ChatMode)}
-                  className="rounded-md border border-gray-300 px-2 py-2 text-sm"
+                  className={fieldClass}
                   disabled={sending}
                 >
                   {CHAT_MODES.map((m) => (
@@ -723,21 +718,13 @@ export default function ChatPage() {
                   onChange={(event) => setComposerText(event.target.value)}
                   placeholder="Xabar yozing..."
                   disabled={sending}
-                  className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-black focus:outline-none disabled:opacity-50"
+                  className={`${fieldClass} min-w-[10rem] flex-1`}
                 />
-                <button
-                  type="submit"
-                  disabled={sending || composerText.trim().length === 0}
-                  className="rounded-md bg-black px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-                >
+                <button type="submit" disabled={sending || composerText.trim().length === 0} className={primaryButtonClass}>
                   {sending ? "..." : editingMessageId !== null ? "Qayta generatsiya qilish" : "Yuborish"}
                 </button>
                 {editingMessageId !== null && !sending && (
-                  <button
-                    type="button"
-                    onClick={handleCancelEdit}
-                    className="rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50"
-                  >
+                  <button type="button" onClick={handleCancelEdit} className={secondaryButtonClass}>
                     Tahrirlashni bekor qilish
                   </button>
                 )}
@@ -745,7 +732,7 @@ export default function ChatPage() {
                   <button
                     type="button"
                     onClick={handleCancel}
-                    className="rounded-md border border-red-300 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
+                    className={`${secondaryButtonClass} border-red-300 text-red-600 hover:bg-red-50 focus-visible:ring-red-500 dark:border-red-900/60 dark:text-red-400 dark:hover:bg-red-950/40`}
                   >
                     Bekor qilish
                   </button>

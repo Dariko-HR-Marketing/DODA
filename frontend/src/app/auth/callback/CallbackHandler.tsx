@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ApiError, listMySessions } from "@/lib/api";
 import { storeSessionId } from "@/lib/session";
+import { ErrorBanner } from "@/components/ui";
 
 // The one thing this page exists for: the backend's real Google login
 // flow (api/auth.py's /v1/auth/google/callback) redirects the browser
@@ -81,9 +82,12 @@ export default function CallbackHandler() {
 
   if (error) {
     return (
-      <div className="w-full max-w-sm space-y-3 text-center">
-        <p className="text-sm text-red-600">{error}</p>
-        <a href="/login" className="text-sm font-medium underline">
+      <div className="w-full max-w-sm space-y-4 text-center">
+        <ErrorBanner>{error}</ErrorBanner>
+        <a
+          href="/login"
+          className="inline-block text-sm font-medium text-gray-900 underline hover:text-gray-600 dark:text-gray-100 dark:hover:text-gray-300"
+        >
           Qaytadan kirish
         </a>
       </div>
@@ -91,10 +95,25 @@ export default function CallbackHandler() {
   }
 
   return (
-    <p className="text-sm text-gray-500">
-      {isRetrying
-        ? "Kirish tasdiqlanmoqda... (server uyg'onayotgan bo'lishi mumkin, biroz kuting)"
-        : "Kirish tasdiqlanmoqda..."}
-    </p>
+    <div className="flex flex-col items-center gap-3 text-center">
+      <svg
+        aria-hidden="true"
+        className="h-6 w-6 animate-spin text-gray-400 dark:text-gray-500"
+        viewBox="0 0 24 24"
+        fill="none"
+      >
+        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+        <path
+          className="opacity-75"
+          fill="currentColor"
+          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+        />
+      </svg>
+      <p className="text-sm text-gray-500 dark:text-gray-400">
+        {isRetrying
+          ? "Kirish tasdiqlanmoqda... (server uyg'onayotgan bo'lishi mumkin, biroz kuting)"
+          : "Kirish tasdiqlanmoqda..."}
+      </p>
+    </div>
   );
 }

@@ -56,6 +56,20 @@ import {
 } from "@/lib/api";
 import { KillSwitchPanel } from "@/components/KillSwitchPanel";
 import { useSession } from "@/lib/useSession";
+import {
+  Card,
+  EmptyListItem,
+  ErrorBanner,
+  PageTitle,
+  SectionHeading,
+  actionLinkClass,
+  backLinkClass,
+  compactSecondaryButtonClass,
+  dangerLinkClass,
+  fieldClassCompact,
+  mutedLinkClass,
+  primaryButtonClass,
+} from "@/components/ui";
 
 const CUSTOMER_ROLES: CustomerRole[] = ["customer_owner", "member", "auditor"];
 const ALWAYS_ON_NOTIFICATION_TYPE: NotificationType = "SECURITY_ALERT";
@@ -391,14 +405,14 @@ export default function CustomerPage() {
   return (
     <main className="mx-auto w-full max-w-3xl flex-1 space-y-8 p-6">
       <div>
-        <Link href="/workspaces" className="text-sm text-gray-500 hover:text-black">
-          &larr; Workspace&apos;lar
+        <Link href="/workspaces" className={backLinkClass}>
+          <span aria-hidden="true">&larr;</span> Workspace&apos;lar
         </Link>
       </div>
 
-      <h1 className="text-xl font-semibold">{customerName ?? "Customer"}</h1>
+      <PageTitle>{customerName ?? "Customer"}</PageTitle>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <ErrorBanner>{error}</ErrorBanner>}
 
       <KillSwitchPanel
         killSwitch={killSwitch}
@@ -409,21 +423,21 @@ export default function CustomerPage() {
         onDisengage={handleDisengageKillSwitch}
       />
 
-      <section>
-        <h2 className="mb-3 text-lg font-semibold">A&apos;zolar</h2>
-        <form onSubmit={handleInviteMember} className="mb-3 flex gap-2">
+      <Card as="section">
+        <SectionHeading className="mb-3">A&apos;zolar</SectionHeading>
+        <form onSubmit={handleInviteMember} className="mb-3 flex flex-wrap gap-2">
           <input
             type="text"
             value={newMemberUserId}
             onChange={(event) => setNewMemberUserId(event.target.value)}
             placeholder="User ID (UUID)"
-            className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-black focus:outline-none"
+            className="min-w-[14rem] flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/10 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100"
           />
           <select
             aria-label="Yangi a'zo roli"
             value={newMemberRole}
             onChange={(event) => setNewMemberRole(event.target.value as CustomerRole)}
-            className="rounded-md border border-gray-300 px-2 py-2 text-sm"
+            className="rounded-lg border border-gray-300 bg-white px-2.5 py-2 text-sm text-gray-900 focus:border-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/10 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100"
           >
             {CUSTOMER_ROLES.map((role) => (
               <option key={role} value={role}>
@@ -431,24 +445,20 @@ export default function CustomerPage() {
               </option>
             ))}
           </select>
-          <button
-            type="submit"
-            disabled={newMemberUserId.trim().length === 0 || invitingMember}
-            className="rounded-md bg-black px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
-          >
+          <button type="submit" disabled={newMemberUserId.trim().length === 0 || invitingMember} className={primaryButtonClass}>
             Qo&apos;shish
           </button>
         </form>
         <ul className="space-y-1">
           {members?.map((member) => (
-            <li key={member.membership_id} className="flex items-center justify-between text-sm">
-              <span>{member.display_name}</span>
+            <li key={member.membership_id} className="flex items-center justify-between gap-2 py-1 text-sm">
+              <span className="text-gray-900 dark:text-gray-100">{member.display_name}</span>
               <div className="flex items-center gap-2">
                 <select
                   aria-label={`${member.display_name} roli`}
                   value={member.role}
                   onChange={(event) => handleChangeMemberRole(member, event.target.value as CustomerRole)}
-                  className="rounded border border-gray-200 bg-gray-100 px-1 py-0.5 text-xs text-gray-600"
+                  className="rounded-full border border-gray-200 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-900/10 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
                 >
                   {CUSTOMER_ROLES.map((role) => (
                     <option key={role} value={role}>
@@ -456,29 +466,24 @@ export default function CustomerPage() {
                     </option>
                   ))}
                 </select>
-                <button
-                  onClick={() => handleRemoveMember(member)}
-                  className="text-xs text-red-600 hover:underline"
-                >
+                <button onClick={() => handleRemoveMember(member)} className={dangerLinkClass}>
                   Chiqarish
                 </button>
               </div>
             </li>
           ))}
-          {members !== null && members.length === 0 && (
-            <li className="text-sm text-gray-500">A&apos;zo yo&apos;q.</li>
-          )}
+          {members !== null && members.length === 0 && <EmptyListItem>A&apos;zo yo&apos;q.</EmptyListItem>}
         </ul>
-      </section>
+      </Card>
 
-      <section>
-        <h2 className="mb-3 text-lg font-semibold">AI provayderlar</h2>
+      <Card as="section">
+        <SectionHeading className="mb-3">AI provayderlar</SectionHeading>
         {budgetStatus !== null && (
           <div
-            className={`mb-3 rounded-md border p-3 text-sm ${
+            className={`mb-3 rounded-lg border p-3 text-sm ${
               budgetStatus.over_soft_budget
-                ? "border-amber-300 bg-amber-50 text-amber-900"
-                : "border-gray-200 text-gray-700"
+                ? "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200"
+                : "border-gray-200 text-gray-700 dark:border-gray-800 dark:text-gray-300"
             }`}
           >
             <span className="font-medium">{budgetStatus.year_month} AI byudjeti:</span>{" "}
@@ -489,10 +494,10 @@ export default function CustomerPage() {
           </div>
         )}
         {usageReport !== null && usageReport.length > 0 && (
-          <div className="mb-3 overflow-x-auto rounded-md border border-gray-200">
+          <div className="mb-3 overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-800">
             <table className="w-full text-left text-sm">
               <caption className="sr-only">Workspace, provayder va model bo&apos;yicha AI xarajati</caption>
-              <thead className="bg-gray-50 text-xs text-gray-500">
+              <thead className="bg-gray-50 text-xs text-gray-500 dark:bg-gray-950/40 dark:text-gray-400">
                 <tr>
                   <th scope="col" className="px-3 py-2">
                     Workspace
@@ -515,7 +520,7 @@ export default function CustomerPage() {
                 {usageReport.map((row) => (
                   <tr
                     key={`${row.workspace_id}-${row.provider}-${row.model}`}
-                    className="border-t border-gray-200"
+                    className="border-t border-gray-200 text-gray-800 dark:border-gray-800 dark:text-gray-200"
                   >
                     <td className="px-3 py-2">{row.workspace_name}</td>
                     <td className="px-3 py-2">{row.provider}</td>
@@ -531,8 +536,8 @@ export default function CustomerPage() {
         {/* FR-ADM-005: set/clear this customer's own AI budget caps —
             no row (budgetLimits.soft_cap_usd === null) means the
             deployment-wide default from the banner above still applies. */}
-        <form onSubmit={handleSetBudgetLimits} className="mb-3 flex flex-wrap items-center gap-2 text-sm">
-          <label className="flex items-center gap-1">
+        <form onSubmit={handleSetBudgetLimits} className="mb-3 flex flex-wrap items-center gap-3 text-sm">
+          <label className="flex items-center gap-1.5 text-gray-700 dark:text-gray-300">
             Soft cap ($)
             <input
               type="number"
@@ -540,10 +545,10 @@ export default function CustomerPage() {
               step="0.01"
               value={softCapInput}
               onChange={(e) => setSoftCapInput(e.target.value)}
-              className="w-24 rounded-md border border-gray-300 px-2 py-1"
+              className={`${fieldClassCompact} w-24`}
             />
           </label>
-          <label className="flex items-center gap-1">
+          <label className="flex items-center gap-1.5 text-gray-700 dark:text-gray-300">
             Hard cap ($)
             <input
               type="number"
@@ -551,23 +556,14 @@ export default function CustomerPage() {
               step="0.01"
               value={hardCapInput}
               onChange={(e) => setHardCapInput(e.target.value)}
-              className="w-24 rounded-md border border-gray-300 px-2 py-1"
+              className={`${fieldClassCompact} w-24`}
             />
           </label>
-          <button
-            type="submit"
-            disabled={savingBudgetLimits}
-            className="rounded-md bg-blue-600 px-3 py-1.5 text-white disabled:opacity-50"
-          >
+          <button type="submit" disabled={savingBudgetLimits} className={compactSecondaryButtonClass + " border-blue-200 bg-blue-600 text-white hover:bg-blue-700 dark:border-blue-900"}>
             Saqlash
           </button>
           {budgetLimits?.soft_cap_usd !== null && budgetLimits?.soft_cap_usd !== undefined && (
-            <button
-              type="button"
-              onClick={handleClearBudgetLimits}
-              disabled={savingBudgetLimits}
-              className="text-xs text-red-600 hover:underline disabled:opacity-50"
-            >
+            <button type="button" onClick={handleClearBudgetLimits} disabled={savingBudgetLimits} className={dangerLinkClass}>
               Standart qiymatga qaytarish
             </button>
           )}
@@ -576,11 +572,11 @@ export default function CustomerPage() {
           {providerStatuses?.map((provider) => (
             <li
               key={provider.provider}
-              className="flex items-center justify-between rounded-md border border-gray-200 px-3 py-2 text-sm"
+              className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-800"
             >
               <div className="flex flex-col">
-                <span className="font-medium">{provider.provider}</span>
-                <span className="text-xs text-gray-500">
+                <span className="font-medium text-gray-900 dark:text-gray-100">{provider.provider}</span>
+                <span className="text-xs text-gray-500 dark:text-gray-400">
                   {provider.configured ? "sozlangan" : "kalit yo'q"}
                   {provider.verified_at !== null &&
                     (provider.verified_ok
@@ -588,49 +584,42 @@ export default function CustomerPage() {
                       : ` · tekshirilgan: ${provider.verified_error ?? "xato"}`)}
                 </span>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-3">
                 <button
                   onClick={() => handleTestProviderConnection(provider)}
                   disabled={testingProvider !== null}
-                  className="text-xs text-blue-600 hover:underline disabled:opacity-50"
+                  className={actionLinkClass}
                 >
                   {testingProvider === provider.provider ? "Tekshirilmoqda..." : "Ulanishni tekshirish"}
                 </button>
-                <button
-                  onClick={() => handleToggleProviderEnabled(provider)}
-                  className="text-xs text-gray-700 hover:underline"
-                >
+                <button onClick={() => handleToggleProviderEnabled(provider)} className={mutedLinkClass}>
                   {provider.enabled ? "O'chirish" : "Yoqish"}
                 </button>
               </div>
             </li>
           ))}
           {providerStatuses !== null && providerStatuses.length === 0 && (
-            <li className="text-sm text-gray-500">Provayder ma&apos;lumoti yo&apos;q.</li>
+            <EmptyListItem>Provayder ma&apos;lumoti yo&apos;q.</EmptyListItem>
           )}
         </ul>
         {fallbackSetting !== null && (
-          <div className="mt-3 flex items-center justify-between rounded-md border border-gray-200 px-3 py-2 text-sm">
+          <div className="mt-3 flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-800">
             <div className="flex flex-col">
-              <span>Avtomatik fallback</span>
-              <span className="text-xs text-gray-500">
+              <span className="text-gray-900 dark:text-gray-100">Avtomatik fallback</span>
+              <span className="text-xs text-gray-500 dark:text-gray-400">
                 Vaqtinchalik provayder xatosida (timeout/rate-limit) boshqa provayderga avtomatik o&apos;tish.
                 Standart — o&apos;chirilgan.
               </span>
             </div>
-            <button
-              onClick={handleToggleFallback}
-              disabled={togglingFallback}
-              className="text-xs text-blue-600 hover:underline disabled:opacity-50"
-            >
+            <button onClick={handleToggleFallback} disabled={togglingFallback} className={actionLinkClass}>
               {fallbackSetting.enabled ? "O'chirish" : "Yoqish"}
             </button>
           </div>
         )}
 
         {myAiPreference !== null && (
-          <form onSubmit={handleSetMyAiPreference} className="mt-3 flex items-center gap-2 text-xs">
-            <span className="text-gray-500">
+          <form onSubmit={handleSetMyAiPreference} className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+            <span className="text-gray-500 dark:text-gray-400">
               Mening AI afzalligim ({myAiPreference.provider ?? "tizim standart"}
               {myAiPreference.model ? ` / ${myAiPreference.model}` : ""}):
             </span>
@@ -638,7 +627,7 @@ export default function CustomerPage() {
               aria-label="Mening AI provayderim"
               value={myAiProviderChoice}
               onChange={(event) => setMyAiProviderChoice(event.target.value as AiProvider)}
-              className="rounded border border-gray-200 bg-gray-50 px-1 py-1"
+              className={fieldClassCompact}
             >
               {AI_PROVIDERS.map((provider) => (
                 <option key={provider} value={provider}>
@@ -651,13 +640,9 @@ export default function CustomerPage() {
               value={myAiModelChoice}
               onChange={(event) => setMyAiModelChoice(event.target.value)}
               placeholder="model (ixtiyoriy)"
-              className="w-32 rounded border border-gray-200 px-1 py-1"
+              className={`${fieldClassCompact} w-32`}
             />
-            <button
-              type="submit"
-              disabled={savingMyAiPreference}
-              className="rounded border border-gray-300 px-2 py-1 font-medium text-gray-700 disabled:opacity-50"
-            >
+            <button type="submit" disabled={savingMyAiPreference} className={actionLinkClass}>
               Saqlash
             </button>
             {myAiPreference.provider !== null && (
@@ -665,103 +650,90 @@ export default function CustomerPage() {
                 type="button"
                 onClick={handleClearMyAiPreference}
                 disabled={savingMyAiPreference}
-                className="text-red-600 hover:underline disabled:opacity-50"
+                className={dangerLinkClass}
               >
                 Tizim standartga qaytarish
               </button>
             )}
           </form>
         )}
-      </section>
+      </Card>
 
       {archivedWorkspaces !== null && archivedWorkspaces.length > 0 && (
-        <section>
-          <h2 className="mb-3 text-lg font-semibold">Arxivlangan workspace&apos;lar</h2>
+        <Card as="section">
+          <SectionHeading className="mb-3">Arxivlangan workspace&apos;lar</SectionHeading>
           <ul className="space-y-1">
             {archivedWorkspaces.map((workspace) => (
-              <li key={workspace.id} className="flex items-center justify-between text-sm">
-                <span className="text-gray-500">{workspace.name}</span>
+              <li key={workspace.id} className="flex items-center justify-between gap-2 py-1 text-sm">
+                <span className="text-gray-500 dark:text-gray-400">{workspace.name}</span>
                 <button
                   onClick={() => handleRestoreWorkspace(workspace)}
                   disabled={restoringWorkspaceId === workspace.id}
-                  className="text-xs text-blue-600 hover:underline disabled:opacity-50"
+                  className={actionLinkClass}
                 >
                   Tiklash
                 </button>
               </li>
             ))}
           </ul>
-        </section>
+        </Card>
       )}
 
-      <section>
-        <h2 className="mb-3 text-lg font-semibold">Bildirishnoma sozlamalari</h2>
+      <Card as="section">
+        <SectionHeading className="mb-3">Bildirishnoma sozlamalari</SectionHeading>
         <ul className="space-y-1">
           {preferences?.map((preference) => (
-            <li
-              key={preference.notification_type}
-              className="flex items-center justify-between text-sm"
-            >
-              <span>{preference.notification_type}</span>
+            <li key={preference.notification_type} className="flex items-center justify-between gap-2 py-1 text-sm">
+              <span className="text-gray-900 dark:text-gray-100">{preference.notification_type}</span>
               {preference.notification_type === ALWAYS_ON_NOTIFICATION_TYPE ? (
-                <span className="text-xs text-gray-500">doim yoqilgan</span>
+                <span className="text-xs text-gray-500 dark:text-gray-400">doim yoqilgan</span>
               ) : (
-                <button
-                  onClick={() => handleTogglePreference(preference)}
-                  className="text-xs text-blue-600 hover:underline"
-                >
+                <button onClick={() => handleTogglePreference(preference)} className={actionLinkClass}>
                   {preference.enabled ? "O'chirish" : "Yoqish"}
                 </button>
               )}
             </li>
           ))}
         </ul>
-      </section>
+      </Card>
 
-      <section>
-        <h2 className="mb-3 text-lg font-semibold">Bildirishnomalar (barcha workspace)</h2>
+      <Card as="section">
+        <SectionHeading className="mb-3">Bildirishnomalar (barcha workspace)</SectionHeading>
         <ul className="space-y-2">
           {notifications?.map((notification) => (
             <li
               key={notification.id}
-              className="flex items-center justify-between rounded-md border border-gray-200 px-3 py-2 text-sm"
+              className="flex items-center justify-between gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-800"
             >
-              <span className={notification.read_at ? "text-gray-400" : ""}>
+              <span className={notification.read_at ? "text-gray-400 dark:text-gray-500" : "text-gray-900 dark:text-gray-100"}>
                 {notification.notification_type} — {notification.reference_type}
               </span>
               {!notification.read_at && (
-                <button
-                  onClick={() => handleMarkRead(notification)}
-                  className="text-xs text-blue-600 hover:underline"
-                >
+                <button onClick={() => handleMarkRead(notification)} className={actionLinkClass}>
                   O&apos;qildi deb belgilash
                 </button>
               )}
             </li>
           ))}
           {notifications !== null && notifications.length === 0 && (
-            <li className="text-sm text-gray-500">Bildirishnoma yo&apos;q.</li>
+            <EmptyListItem>Bildirishnoma yo&apos;q.</EmptyListItem>
           )}
         </ul>
-      </section>
+      </Card>
 
-      <section>
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Audit</h2>
-          <button
-            onClick={handleVerifyChain}
-            disabled={verifyingChain}
-            className="rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 disabled:opacity-50"
-          >
+      <Card as="section">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <SectionHeading>Audit</SectionHeading>
+          <button onClick={handleVerifyChain} disabled={verifyingChain} className={compactSecondaryButtonClass}>
             {verifyingChain ? "Tekshirilmoqda..." : "Zanjirni tekshirish"}
           </button>
         </div>
         {chainVerification && (
           <div
-            className={`mb-3 rounded-md border p-3 text-sm ${
+            className={`mb-3 rounded-lg border p-3 text-sm ${
               chainVerification.ok
-                ? "border-green-300 bg-green-50 text-green-900"
-                : "border-red-300 bg-red-50 text-red-900"
+                ? "border-green-200 bg-green-50 text-green-900 dark:border-green-900/50 dark:bg-green-950/30 dark:text-green-200"
+                : "border-red-200 bg-red-50 text-red-900 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-200"
             }`}
           >
             {chainVerification.ok ? (
@@ -782,19 +754,16 @@ export default function CustomerPage() {
             event.preventDefault();
             setAppliedTraceId(traceIdInput.trim());
           }}
-          className="mb-3 flex gap-2 text-xs"
+          className="mb-3 flex flex-wrap gap-2"
         >
           <input
             type="text"
             value={traceIdInput}
             onChange={(event) => setTraceIdInput(event.target.value)}
             placeholder="trace_id bo'yicha filtrlash"
-            className="flex-1 rounded-md border border-gray-300 px-2 py-1.5 font-mono focus:border-black focus:outline-none"
+            className={`${fieldClassCompact} min-w-[14rem] flex-1 font-mono`}
           />
-          <button
-            type="submit"
-            className="rounded border border-gray-300 px-2 py-1 font-medium text-gray-700"
-          >
+          <button type="submit" className={compactSecondaryButtonClass}>
             Filtr
           </button>
           {appliedTraceId !== "" && (
@@ -804,7 +773,7 @@ export default function CustomerPage() {
                 setTraceIdInput("");
                 setAppliedTraceId("");
               }}
-              className="text-red-600 hover:underline"
+              className={dangerLinkClass}
             >
               Tozalash
             </button>
@@ -814,7 +783,7 @@ export default function CustomerPage() {
               type="button"
               onClick={handleExportEvidencePackage}
               disabled={exportingEvidence}
-              className="rounded border border-gray-300 px-2 py-1 font-medium text-gray-700 disabled:opacity-50"
+              className={compactSecondaryButtonClass}
             >
               {exportingEvidence ? "Eksport qilinmoqda..." : "Evidence eksport"}
             </button>
@@ -822,21 +791,21 @@ export default function CustomerPage() {
         </form>
         <ul className="space-y-2">
           {auditEvents?.map((event) => (
-            <li key={event.id} className="rounded-md border border-gray-200 px-3 py-2 text-sm">
-              <div className="flex items-center justify-between">
-                <span className="font-medium">{event.event_type}</span>
-                <span className="text-xs text-gray-500">
+            <li key={event.id} className="rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-800">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-medium text-gray-900 dark:text-gray-100">{event.event_type}</span>
+                <span className="text-xs text-gray-500 dark:text-gray-400">
                   {new Date(event.occurred_at).toLocaleString()}
                 </span>
               </div>
-              <div className="flex items-center justify-between text-xs text-gray-500">
+              <div className="flex items-center justify-between gap-2 text-xs text-gray-500 dark:text-gray-400">
                 <span>{event.actor_id}</span>
                 <button
                   onClick={() => {
                     setTraceIdInput(event.trace_id);
                     setAppliedTraceId(event.trace_id);
                   }}
-                  className="font-mono text-gray-500 hover:text-blue-600 hover:underline"
+                  className="rounded font-mono text-gray-500 hover:text-blue-600 hover:underline dark:text-gray-400 dark:hover:text-blue-400"
                   title="Shu trace_id bo'yicha filtrlash"
                 >
                   {event.trace_id}
@@ -845,10 +814,10 @@ export default function CustomerPage() {
             </li>
           ))}
           {auditEvents !== null && auditEvents.length === 0 && (
-            <li className="text-sm text-gray-500">Audit yozuvi yo&apos;q.</li>
+            <EmptyListItem>Audit yozuvi yo&apos;q.</EmptyListItem>
           )}
         </ul>
-      </section>
+      </Card>
     </main>
   );
 }

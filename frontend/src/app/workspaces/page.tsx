@@ -13,6 +13,7 @@ import {
 } from "@/lib/api";
 import { clearStoredSessionId } from "@/lib/session";
 import { useSession } from "@/lib/useSession";
+import { Badge, Card, EmptyState, ErrorBanner, PageTitle, SectionHeading } from "@/components/ui";
 
 export default function WorkspacesPage() {
   const router = useRouter();
@@ -54,60 +55,74 @@ export default function WorkspacesPage() {
   if (sessionId === null) return null;
 
   return (
-    <main className="mx-auto w-full max-w-2xl flex-1 p-6">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Mening workspace&apos;larim</h1>
+    <main className="mx-auto w-full max-w-2xl flex-1 space-y-8 p-6">
+      <div className="flex items-center justify-between">
+        <PageTitle>Mening workspace&apos;larim</PageTitle>
         <div className="flex items-center gap-4">
-          <Link href="/sessions" className="text-sm text-gray-500 hover:text-black">
+          <Link
+            href="/sessions"
+            className="text-sm font-medium text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100"
+          >
             Sessiyalar
           </Link>
-          <button onClick={logOut} className="text-sm text-gray-500 hover:text-black">
+          <button
+            onClick={logOut}
+            className="text-sm font-medium text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100"
+          >
             Chiqish
           </button>
         </div>
       </div>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
-      {workspaces === null && !error && <p className="text-sm text-gray-500">Yuklanmoqda...</p>}
-      {workspaces !== null && workspaces.length === 0 && (
-        <p className="text-sm text-gray-500">Siz hech qanday workspace&apos;ga a&apos;zo emassiz.</p>
+      {error && <ErrorBanner>{error}</ErrorBanner>}
+      {workspaces === null && !error && (
+        <p className="text-sm text-gray-500 dark:text-gray-400">Yuklanmoqda...</p>
       )}
 
-      <ul className="space-y-2">
-        {workspaces?.map((workspace) => (
-          <li
-            key={workspace.workspace_id}
-            className="flex items-center justify-between rounded-md border border-gray-200 px-4 py-3 hover:border-black"
-          >
-            <Link href={`/workspaces/${workspace.workspace_id}`} className="flex-1">
-              <div className="font-medium">{workspace.workspace_name}</div>
-            </Link>
-            <div className="flex flex-1 items-center justify-end gap-3">
-              <Link
-                href={`/customers/${workspace.customer_id}`}
-                className="text-sm text-gray-500 hover:text-black hover:underline"
-              >
-                {workspace.customer_name}
-              </Link>
-              <span className="rounded bg-gray-100 px-2 py-1 text-xs text-gray-600">{workspace.role}</span>
-            </div>
-          </li>
-        ))}
-      </ul>
+      <div>
+        <ul className="space-y-2">
+          {workspaces?.map((workspace) => (
+            <li key={workspace.workspace_id}>
+              <Card className="flex items-center justify-between gap-4 !p-4 transition-shadow hover:shadow-md">
+                <Link
+                  href={`/workspaces/${workspace.workspace_id}`}
+                  className="min-w-0 flex-1 font-medium text-gray-900 hover:text-gray-600 dark:text-gray-50 dark:hover:text-gray-300"
+                >
+                  {workspace.workspace_name}
+                </Link>
+                <div className="flex shrink-0 items-center gap-3">
+                  <Link
+                    href={`/customers/${workspace.customer_id}`}
+                    className="text-sm text-gray-500 hover:text-gray-900 hover:underline dark:text-gray-400 dark:hover:text-gray-100"
+                  >
+                    {workspace.customer_name}
+                  </Link>
+                  <Badge>{workspace.role}</Badge>
+                </div>
+              </Card>
+            </li>
+          ))}
+        </ul>
+        {workspaces !== null && workspaces.length === 0 && (
+          <EmptyState>Siz hech qanday workspace&apos;ga a&apos;zo emassiz.</EmptyState>
+        )}
+      </div>
 
       {customers !== null && customers.length > 0 && (
-        <section className="mt-8">
-          <h2 className="mb-2 text-sm font-semibold text-gray-700">Customer&apos;larim</h2>
+        <section>
+          <SectionHeading className="mb-3">Customer&apos;larim</SectionHeading>
           <ul className="space-y-2">
             {customers.map((customer) => (
-              <li
-                key={customer.customer_id}
-                className="flex items-center justify-between rounded-md border border-gray-200 px-4 py-3 hover:border-black"
-              >
-                <Link href={`/customers/${customer.customer_id}`} className="flex-1 font-medium">
-                  {customer.customer_name}
-                </Link>
-                <span className="rounded bg-gray-100 px-2 py-1 text-xs text-gray-600">{customer.role}</span>
+              <li key={customer.customer_id}>
+                <Card className="flex items-center justify-between gap-4 !p-4 transition-shadow hover:shadow-md">
+                  <Link
+                    href={`/customers/${customer.customer_id}`}
+                    className="min-w-0 flex-1 font-medium text-gray-900 hover:text-gray-600 dark:text-gray-50 dark:hover:text-gray-300"
+                  >
+                    {customer.customer_name}
+                  </Link>
+                  <Badge>{customer.role}</Badge>
+                </Card>
               </li>
             ))}
           </ul>

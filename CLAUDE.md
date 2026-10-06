@@ -9922,3 +9922,146 @@ semantik qidiruv talab qiladi) bog'liq — bu safar alohida qurilmadi,
 ularning dizayn eslatmasi o'zgarishsiz qoldi. Sensitive turi
 (shifrlash/consent modeli) hamon yangi Product Owner qarorini talab
 qiladi, eng xavfli/eng kech boshlanishi kerak qism sifatida ochiq.
+
+**Barcha frontend sahifalari UX/UI jihatidan professional darajada qayta
+ishlandi — Product Owner'ning aniq ko'rsatmasiga ko'ra ("Barcha
+Pagelarni UX hamda UI jihatidan professional darajada Shakllantirgin").
+Bu funksional o'zgarish EMAS — birorta backend endpoint, request/response
+shakli, yoki frontend-ning o'z ishlash mantig'i (qaysi tugma qachon
+ko'rinadi, qaysi forma nimani yuboradi) o'zgarmadi. Faqat vizual qatlam:
+yangi, markazlashtirilgan dizayn-tizimi (`frontend/src/components/ui.tsx`)
+va uning barcha 8 sahifa/komponentga qo'llanilishi.**
+
+Bu ishning o'zi xavfli edi — 19 ta E2E test, barcha bir necha o'nlab
+`getByText`/`getByRole`/`getByLabel`/`getByTestId`/`getByPlaceholder`
+va xom `locator()` chaqiruvlari orqali DOM strukturasining aniq
+shakliga (teg turi, matn, `aria-label`, `id`, `placeholder`, element
+ierarxiyasi) bog'langan. Shuning uchun birinchi qadam KOD YOZISH emas,
+**BUTUN `frontend/e2e/*.spec.ts` to'plamini (11 fayl) to'liq o'qib,
+har bir shunday bog'liqlikni ro'yxatga olish** edi — bu ro'yxat butun
+ishning "buzmaslik shartnomasi" bo'lib xizmat qildi. Eng muhim, kamdan-kam
+uchraydigan cheklovlar:
+- `customers/[id]`dagi AI provayder ro'yxati `<ul><li hasText="OPENAI">`
+  shaklida qolishi SHART (`page.locator("li", {hasText: "CLAUDE"})`).
+- Fallback toggle qatori hech qanday qo'shimcha `<div>` qatlami bilan
+  o'ralmasligi SHART — `chat.spec.ts`
+  `page.locator("div", {hasText: "Avtomatik fallback"}).first()` dan
+  keyin `.getByRole("button", {name:"Yoqish"})` chaqiradi; agar bu
+  bo'limning BARCHA farzandlari yana bitta tashqi `<div>`ga o'ralsa,
+  `.first()` boshqa "Yoqish" tugmasi bor KENGROQ ajdodga mos kelib,
+  strict-mode noaniqligi yuzaga kelardi.
+- AI xarajat hisobot jadvali xom `<table><thead><tbody><tr><th scope=
+  "col"><td>` bo'lishi SHART (`getByRole("cell", {name: "Demo
+  Workspace"})`).
+- Byudjet limit forma maydonlari `<label>`ning o'z farzandi sifatida
+  `<input>`ni o'rashi SHART (implicit label-association —
+  `getByLabel("Soft cap ($)")`).
+- Workspace va customer sahifasidagi til/provayder pin formalari har
+  biri O'Z `<form>`i bo'lishi SHART (`form:has(select[aria-label=...])`
+  scoped locator'lar).
+- `Card` komponentining `as` propi — `<section>` kerak bo'lgan har bir
+  joyda `<div>`ga aylanib qolmasligi uchun.
+
+Yangi `frontend/src/components/ui.tsx` — bitta markazlashtirilgan
+dizayn-kit: `fieldClass`/`fieldClassCompact` (input/select), to'rt xil
+tugma klassi (`primaryButtonClass`/`secondaryButtonClass`/
+`dangerButtonClass`/`compactButtonClass`+`compactSecondaryButtonClass`),
+matn-uslubidagi inline havolalar (`actionLinkClass`/`dangerLinkClass`/
+`mutedLinkClass`), `Card` (polimorfik `as` prop bilan — hech qachon
+kerakli teg turini o'zgartirmaydi), `PageTitle`/`SectionHeading`/
+`SectionSubtext`, `EmptyState`/`EmptyListItem` (ikkinchisi — `<ul>`ning
+yagona qonuniy farzandi `<li>` bo'lishi kerakligi uchun, FR-KNW-003
+atrofida avvalroq tuzatilgan xato sinfining oldini oladigan, ataylab
+alohida komponent), `ErrorBanner` (`role="alert"`), va `Badge`+
+`statusTone()` — `TaskStatus`/`ActionStatus`/`ReminderStatus`ning
+har bir aniq qiymatini (substring emas, literal lookup — masalan
+`COMPENSATING` va `COMPENSATED` faqat suffiks bilan farq qilgani uchun
+substring evristikasi ularni bir xil rangga bo'yab qo'yardi) mos
+rangga (success/warning/danger/info/neutral) xaritalaydigan funksiya.
+Hammasi — oddiy className string konstantalari, YOZISH komponenti
+emas: input/select/button'lar o'zining aniq teg/`id`/`aria-label`/
+`placeholder`/`type`ini saqlab qoladi, chunki bular Playwright
+selektorlari va native label-assotsiatsiya uchun load-bearing.
+
+`globals.css`da haqiqiy, oldin sezilmagan xato topildi va tuzatildi:
+`body`ning `font-family: Arial, Helvetica, sans-serif;` qattiq yozilgan
+qiymati `layout.tsx`da allaqachon sozlangan Geist Sans shriftini (`--font-
+geist-sans` o'zgaruvchisi orqali) butunlay bekor qilib qo'yardi — demak
+custom shrift HECH QACHON render qilinmagan edi. Tuzatildi (`font-family:
+var(--font-sans), ui-sans-serif, system-ui, ...`), background/foreground
+ranglari CSS custom property'larga (`--background`/`--foreground`,
+`prefers-color-scheme: dark` orqali) ko'chirildi.
+
+Barcha 8 sahifa/komponent (`login`, `auth/callback` + `CallbackHandler`,
+`sessions`, `workspaces`, `workspaces/[id]` — eng kattasi, ~1180 qator,
+Task/Action/Audit/Fayllar/Bildirishnoma bo'limlari bilan,
+`workspaces/[id]/chat`, `customers/[id]`, `KillSwitchPanel`) shu
+dizayn-kit bilan qayta yozildi — har bir status chip `Badge`ga, har bir
+inline matn-tugma `actionLinkClass`/`dangerLinkClass`/`mutedLinkClass`ga,
+har bir panel `Card`ga, har bir bo'sh-ro'yxat holati to'g'ri `<li>`
+(`EmptyListItem`) yoki `<p>` (`EmptyState`, faqat `<ul>` tashqarisida)
+ga o'tkazildi.
+
+**Ikkita haqiqiy xato topildi va tuzatildi, qurilish jarayonining
+o'zida:**
+1. `KillSwitchPanel`ni ikkita chaqiruvchi sahifa (`workspaces/[id]`,
+   `customers/[id]`) atrofida qo'shimcha `Card as="section"` bilan
+   o'rab qo'yish — komponentning O'ZI allaqachon `Card as="section"`
+   render qilgani uchun bu ikkita ichma-ich `<section>` yaratardi.
+   Sahifa darajasidagi o'rash olib tashlanib, `Card as="section"`
+   faqat `KillSwitchPanel`ning o'z ichida qoldirildi.
+2. `/login` sahifasining "yoki" ajratuvchisi `text-gray-400` bilan
+   yozilgan edi — bu loyihada bir necha marta (kill-switch pin tugmasi,
+   trace_id tugmalari) takrorlangan, hujjatlashtirilgan WCAG AA kontrast
+   anti-pattern'ining yana bir nusxasi (oq fonda ~2.5:1, kerak 4.5:1).
+   `accessibility.spec.ts` bu xatoni real brauzerda darhol ushladi
+   (`serious: color-contrast`). `text-gray-500`ga o'tkazilib tuzatildi,
+   qayta tekshirishda 0 topilma.
+
+**Tekshiruv jarayonida ikkita, dizaynga aloqasi bo'lmagan E2E
+"muvaffaqiyatsizlik" ko'rindi — ikkalasi ham A/B nazorat tajribasi
+bilan (eski kodga vaqtincha qaytarib, bir xil sharoitda qayta ishga
+tushirib) aniq, soxta signal sifatida tasdiqlandi, taxmin qilinmadi:**
+1. `chat.spec.ts:206`ning race-condition testi — faqat o'zining
+   OLDINGI, qayta urug'lantirilmagan `E2E_CHAT_` seed muhitiga qarshi
+   qo'lda, bir necha marta ketma-ket diagnostika ishga tushirilganda
+   paydo bo'ldi. Eski (asl) sahifaga qaytarib, bir xil ifloslangan
+   seed'ga qarshi qayta ishga tushirilganda ham AYNAN SHU xato
+   takrorlandi — demak bu mening o'z qayta-qayta qo'lda tekshirish
+   jarayonim to'plagan eskirgan holat edi, dizayndagi regressiya emas.
+   Fresh seed bilan darhol yo'qoldi.
+2. `chat.spec.ts:14`ning FR-CONV-007 (tahrirlash/qayta generatsiya)
+   qadami — FAQAT to'liq 19-testlik suite birga ishga tushirilganda,
+   `chat.spec.ts`ning o'zini yolg'iz ishga tushirishda emas,
+   muvaffaqiyatsiz bo'ldi (`toHaveLength(2)` kutib, 1 ta USER xabar
+   topdi). Ikkinchi, mustaqil A/B tajriba bilan tasdiqlandi: original,
+   o'zgartirilmagan `chat/page.tsx`ga to'liq qaytarib, qayta build+
+   qayta ishga tushirib, to'liq fresh seed bilan BUTUN 19-test
+   suite'ni qayta ishga tushirganda — xuddi shu xato, xuddi shu
+   joyda, pristine kod bilan ham takrorlandi. Bu dizaynga aloqasi
+   yo'q, oldindan mavjud, yuklama-bog'liq test-timing flake ekanini
+   qat'iy isbotladi (testning o'z to'g'ridan-to'g'ri backend
+   tekshiruvi, to'liq suite'ning og'irroq yuklamasi ostida, UI
+   darajasidagi tasdiqlashlardan OLDIN sodir bo'lishi mumkin) — bu
+   safar TUZATILMADI (doiradan tashqarida, test-timing mantig'iga
+   tegish so'ralmagan ishning qamroviga kirmaydi), faqat shu yerda
+   bilingan, kelajakdagi ehtiyot chorasi sifatida qayd etildi.
+
+Ikkala tajribadan keyin ham dizaynni qayta tiklab, to'liq, fresh-seed
+bilan YAKUNIY tekshiruv o'tkazildi: barcha 11 E2E seed prefiksi qayta
+urug'lantirilib (`E2E_`, `E2E_CUSTOMER_`, `E2E_A11Y_`, `E2E_ARCHIVE_`,
+`E2E_KILLSWITCH_`, `E2E_LOGOUT_`, `E2E_AUDITOR_`, `E2E_AUTHCALLBACK_`,
+`E2E_CHAT_`, `E2E_KNOWLEDGE_`, `E2E_ATTACH_`), production build
+(`next build && next start`) bilan, va natija **barcha 19 E2E spec
+yashil** — yuqoridagi ikkala "flake" ham shu yakuniy, toza ishga
+tushirishda qaytadan ko'rinmadi. Accessibility skaneri (`axe-core`,
+5 sahifa) 0 serious/critical buzilish. 664 backend test o'zgarishsiz
+(bu ish faqat frontend'ga tegishli); `ruff format`/`ruff check`/
+`mypy src/doda`/`mypy scripts` toza; frontend `tsc --noEmit`/`eslint src`
+toza, production build muvaffaqiyatli.
+
+Bu ish davomida `.env`dagi uchta AI provider kaliti (tekshiruv uchun
+CI'ning keyless holatini simulyatsiya qilish maqsadida) vaqtincha
+ajratilgan edi — yakunida zaxira nusxadan tiklanib, `diff` bilan
+bayt-ba-bayt bir xil ekani tasdiqlandi, hech qanday qiymat chat
+matniga yoki logga chiqmadi.

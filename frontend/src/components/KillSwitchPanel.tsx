@@ -1,5 +1,6 @@
 import type { FormEvent } from "react";
 import type { KillSwitchStatusOut } from "@/lib/api";
+import { Card, SectionHeading, compactButtonClass, fieldClassCompact } from "@/components/ui";
 
 interface KillSwitchPanelProps {
   killSwitch: KillSwitchStatusOut | null;
@@ -26,18 +27,15 @@ export function KillSwitchPanel({
   blockedNote,
 }: KillSwitchPanelProps) {
   return (
-    <section>
-      <h2 className="mb-3 text-lg font-semibold">Kill switch</h2>
+    <Card as="section">
+      <SectionHeading className="mb-3">Kill switch</SectionHeading>
       {killSwitch?.engaged ? (
-        <div className="space-y-2 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-900">
+        <div className="space-y-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-900 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-200">
           <p>
-            <strong>Faol.</strong> Sabab: {killSwitch.reason}
+            <strong className="font-semibold">Faol.</strong> Sabab: {killSwitch.reason}
             {blockedNote ? `. ${blockedNote}` : ""}
           </p>
-          <button
-            onClick={onDisengage}
-            className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white"
-          >
+          <button onClick={onDisengage} className={`${compactButtonClass} bg-red-600 text-white hover:bg-red-700 focus-visible:ring-red-600`}>
             O&apos;chirish
           </button>
         </div>
@@ -48,17 +46,17 @@ export function KillSwitchPanel({
             value={reason}
             onChange={(event) => onReasonChange(event.target.value)}
             placeholder="Sabab"
-            className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-black focus:outline-none"
+            className={`${fieldClassCompact} flex-1`}
           />
           <button
             type="submit"
             disabled={reason.trim().length === 0 || engaging}
-            className="rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+            className={`${compactButtonClass} bg-red-600 text-white hover:bg-red-700 focus-visible:ring-red-600`}
           >
             Yoqish
           </button>
         </form>
       )}
-    </section>
+    </Card>
   );
 }

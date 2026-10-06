@@ -26,6 +26,7 @@ import {
   getWorkspaceKillSwitch,
   listActions,
   listDocuments,
+  listMyWorkspaces,
   listNotifications,
   listTasks,
   listWorkspaceAudit,
@@ -55,6 +56,23 @@ import {
 } from "@/lib/api";
 import { KillSwitchPanel } from "@/components/KillSwitchPanel";
 import { useSession } from "@/lib/useSession";
+import {
+  Badge,
+  Card,
+  EmptyListItem,
+  ErrorBanner,
+  PageTitle,
+  SectionHeading,
+  actionLinkClass,
+  backLinkClass,
+  compactButtonClass,
+  compactSecondaryButtonClass,
+  dangerLinkClass,
+  fieldClassCompact,
+  mutedLinkClass,
+  primaryButtonClass,
+  statusTone,
+} from "@/components/ui";
 
 const NEXT_STATUS: Partial<Record<TaskStatus, TaskStatus>> = {
   TODO: "IN_PROGRESS",
@@ -86,6 +104,7 @@ export default function WorkspacePage() {
   const sessionId = useSession();
   const router = useRouter();
 
+  const [workspaceName, setWorkspaceName] = useState<string | null>(null);
   const [killSwitch, setKillSwitch] = useState<KillSwitchStatusOut | null>(null);
   const [killSwitchReason, setKillSwitchReason] = useState("");
   const [engagingKillSwitch, setEngagingKillSwitch] = useState(false);
@@ -131,6 +150,16 @@ export default function WorkspacePage() {
 
   const refresh = useCallback(() => {
     if (sessionId === null) return;
+    // Purely a page-title lookup (same /v1/me/workspaces the workspaces
+    // list already reads workspace_name from) — this page has no
+    // dedicated "get one workspace" endpoint, so this is the cheapest way
+    // to show which workspace the user is actually looking at.
+    listMyWorkspaces(sessionId)
+      .then((list) => {
+        const match = list.find((w) => w.workspace_id === workspaceId);
+        if (match) setWorkspaceName(match.workspace_name);
+      })
+      .catch(() => {});
     getWorkspaceKillSwitch(sessionId, workspaceId).then(setKillSwitch).catch(() => {});
     listTasks(sessionId, workspaceId)
       .then(setTasks)
@@ -551,22 +580,23 @@ export default function WorkspacePage() {
   return (
     <main className="mx-auto w-full max-w-3xl flex-1 space-y-8 p-6">
       <div className="flex items-center justify-between">
-        <Link href="/workspaces" className="text-sm text-gray-500 hover:text-black">
-          &larr; Workspace&apos;lar
+        <Link href="/workspaces" className={backLinkClass}>
+          <span aria-hidden="true">&larr;</span> Workspace&apos;lar
         </Link>
         <div className="flex items-center gap-4">
-          <Link href={`/workspaces/${workspaceId}/chat`} className="text-xs text-blue-600 hover:underline">
+          <Link
+            href={`/workspaces/${workspaceId}/chat`}
+            className="text-sm font-medium text-blue-600 hover:text-blue-700 hover:underline dark:text-blue-400 dark:hover:text-blue-300"
+          >
             Chat
           </Link>
-          <button
-            onClick={handleArchiveWorkspace}
-            disabled={archivingWorkspace}
-            className="text-xs text-red-600 hover:underline disabled:opacity-50"
-          >
+          <button onClick={handleArchiveWorkspace} disabled={archivingWorkspace} className={dangerLinkClass}>
             Workspace&apos;ni arxivlash
           </button>
         </div>
       </div>
+
+      <PageTitle>{workspaceName ?? "Workspace"}</PageTitle>
 
       <KillSwitchPanel
         killSwitch={killSwitch}
@@ -578,42 +608,41 @@ export default function WorkspacePage() {
         blockedNote="Yangi action'lar bloklangan"
       />
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <ErrorBanner>{error}</ErrorBanner>}
 
-      <section>
-        <h2 className="mb-3 text-lg font-semibold">Task&apos;lar</h2>
-        <form onSubmit={handleCreateTask} className="mb-3 flex gap-2">
+      <Card as="section">
+        <SectionHeading className="mb-3">Task&apos;lar</SectionHeading>
+        <form onSubmit={handleCreateTask} className="mb-3 flex flex-wrap gap-2">
           <input
             type="text"
             value={newTaskTitle}
             onChange={(event) => setNewTaskTitle(event.target.value)}
             placeholder="Yangi task nomi"
-            className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-black focus:outline-none"
+            className={`${fieldClassCompact} min-w-[12rem] flex-1`}
           />
           <input
             type="datetime-local"
             aria-label="Muddat (ixtiyoriy)"
             value={newTaskDueDate}
             onChange={(event) => setNewTaskDueDate(event.target.value)}
-            className="rounded-md border border-gray-300 px-2 py-2 text-sm focus:border-black focus:outline-none"
+            className={fieldClassCompact}
           />
-          <button
-            type="submit"
-            disabled={newTaskTitle.trim().length === 0 || creatingTask}
-            className="rounded-md bg-black px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
-          >
+          <button type="submit" disabled={newTaskTitle.trim().length === 0 || creatingTask} className={primaryButtonClass}>
             Qo&apos;shish
           </button>
         </form>
 
-        <div data-testid="task-plan" className="mb-4 rounded-md border border-gray-200 p-3">
+        <div
+          data-testid="task-plan"
+          className="mb-4 rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-950/40"
+        >
           <div className="mb-2 flex items-center gap-2">
-            <h3 className="text-sm font-semibold text-gray-700">Reja</h3>
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-200">Reja</h3>
             <select
               aria-label="Reja davri"
               value={planPeriod}
               onChange={(event) => setPlanPeriod(event.target.value as TaskPlanPeriod)}
-              className="rounded border border-gray-200 bg-gray-50 px-1 py-1 text-xs"
+              className="rounded border border-gray-200 bg-white px-1.5 py-1 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-900/10 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200"
             >
               <option value="daily">Kunlik</option>
               <option value="weekly">Haftalik</option>
@@ -622,89 +651,84 @@ export default function WorkspacePage() {
           <ul className="space-y-1">
             {plan?.map((task) => (
               <li key={task.id} className="flex items-center justify-between text-xs">
-                <span>{task.title}</span>
-                <span className="text-gray-400">
+                <span className="text-gray-700 dark:text-gray-300">{task.title}</span>
+                <span className="text-gray-500 dark:text-gray-400">
                   {task.due_date ? new Date(task.due_date).toLocaleString() : ""}
                 </span>
               </li>
             ))}
           </ul>
           {plan !== null && plan.length === 0 && (
-            <p className="text-xs text-gray-500">Bu davr uchun muddatli task yo&apos;q.</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              Bu davr uchun muddatli task yo&apos;q.
+            </p>
           )}
         </div>
         <ul data-testid="task-list" className="space-y-2">
           {tasks?.map((task) => (
-            <li key={task.id} className="rounded-md border border-gray-200 px-3 py-2">
-              <div className="flex items-center justify-between">
-                <span className={task.status === "DONE" ? "text-gray-400 line-through" : ""}>
+            <li
+              key={task.id}
+              className="rounded-lg border border-gray-200 px-3 py-2.5 dark:border-gray-800"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span
+                  className={
+                    task.status === "DONE"
+                      ? "text-gray-400 line-through dark:text-gray-500"
+                      : "text-gray-900 dark:text-gray-100"
+                  }
+                >
                   {task.title}
                 </span>
-                <div className="flex items-center gap-2">
-                  <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
-                    {task.status}
-                  </span>
+                <div className="flex flex-wrap items-center gap-3">
+                  <Badge tone={statusTone(task.status)}>{task.status}</Badge>
                   {NEXT_STATUS[task.status] && (
-                    <button
-                      onClick={() => handleAdvanceTask(task)}
-                      className="text-xs text-blue-600 hover:underline"
-                    >
+                    <button onClick={() => handleAdvanceTask(task)} className={actionLinkClass}>
                       {NEXT_STATUS[task.status]} qilish
                     </button>
                   )}
-                  <button
-                    onClick={() => toggleTaskHistory(task)}
-                    className="text-xs text-gray-500 hover:underline"
-                  >
+                  <button onClick={() => toggleTaskHistory(task)} className={mutedLinkClass}>
                     {openTaskHistory[task.id] !== undefined ? "Tarixni yashirish" : "Tarix"}
                   </button>
-                  <button
-                    onClick={() => toggleTaskDecisions(task)}
-                    className="text-xs text-gray-500 hover:underline"
-                  >
+                  <button onClick={() => toggleTaskDecisions(task)} className={mutedLinkClass}>
                     {openTaskDecisions[task.id] !== undefined ? "Qarorlarni yashirish" : "Qarorlar"}
                   </button>
-                  <button
-                    onClick={() => toggleTaskReminders(task)}
-                    className="text-xs text-gray-500 hover:underline"
-                  >
+                  <button onClick={() => toggleTaskReminders(task)} className={mutedLinkClass}>
                     {openTaskReminders[task.id] !== undefined ? "Eslatmalarni yashirish" : "Eslatmalar"}
                   </button>
-                  <button
-                    onClick={() => toggleTaskAttachments(task)}
-                    className="text-xs text-gray-500 hover:underline"
-                  >
+                  <button onClick={() => toggleTaskAttachments(task)} className={mutedLinkClass}>
                     {openTaskAttachments[task.id] !== undefined ? "Fayllarni yashirish" : "Bog'langan fayllar"}
                   </button>
                 </div>
               </div>
               {openTaskHistory[task.id] !== undefined && (
-                <ul className="mt-2 space-y-1 border-t border-gray-100 pt-2">
+                <ul className="mt-2 space-y-1 border-t border-gray-100 pt-2 dark:border-gray-800">
                   {openTaskHistory[task.id].map((entry) => (
-                    <li key={entry.id} className="text-xs text-gray-500">
+                    <li key={entry.id} className="text-xs text-gray-500 dark:text-gray-400">
                       {entry.from_status ?? "—"} &rarr; {entry.to_status} ({entry.actor_id},{" "}
                       {new Date(entry.created_at).toLocaleString()})
                     </li>
                   ))}
                   {openTaskHistory[task.id].length === 0 && (
-                    <li className="text-xs text-gray-500">Tarix bo&apos;sh.</li>
+                    <EmptyListItem>Tarix bo&apos;sh.</EmptyListItem>
                   )}
                 </ul>
               )}
               {openTaskDecisions[task.id] !== undefined && (
-                <div className="mt-2 space-y-2 border-t border-gray-100 pt-2">
+                <div className="mt-2 space-y-2 border-t border-gray-100 pt-2 dark:border-gray-800">
                   <ul className="space-y-1">
                     {openTaskDecisions[task.id].map((entry) => (
-                      <li key={entry.id} className="text-xs text-gray-500">
-                        <span className="font-medium text-gray-700">{entry.decision}</span> —{" "}
+                      <li key={entry.id} className="text-xs text-gray-500 dark:text-gray-400">
+                        <span className="font-medium text-gray-700 dark:text-gray-200">{entry.decision}</span>{" "}
+                        —{" "}
                         {entry.variant} ({entry.actor_id}, {new Date(entry.created_at).toLocaleString()})
-                        <div className="text-gray-400">
+                        <div className="text-gray-500 dark:text-gray-500">
                           {entry.tradeoff} · {entry.reason}
                         </div>
                       </li>
                     ))}
                     {openTaskDecisions[task.id].length === 0 && (
-                      <li className="text-xs text-gray-500">Hali qaror yozilmagan.</li>
+                      <EmptyListItem>Hali qaror yozilmagan.</EmptyListItem>
                     )}
                   </ul>
                   <form
@@ -712,40 +736,40 @@ export default function WorkspacePage() {
                       event.preventDefault();
                       handleRecordDecision(task);
                     }}
-                    className="space-y-1"
+                    className="space-y-1.5"
                   >
                     <input
                       aria-label="Variant"
                       placeholder="Variant"
                       value={decisionDrafts[task.id]?.variant ?? ""}
                       onChange={(event) => updateDecisionDraft(task.id, "variant", event.target.value)}
-                      className="w-full rounded border border-gray-200 px-2 py-1 text-xs"
+                      className={`${fieldClassCompact} w-full`}
                     />
                     <input
                       aria-label="Kelishuv (tradeoff)"
                       placeholder="Tradeoff"
                       value={decisionDrafts[task.id]?.tradeoff ?? ""}
                       onChange={(event) => updateDecisionDraft(task.id, "tradeoff", event.target.value)}
-                      className="w-full rounded border border-gray-200 px-2 py-1 text-xs"
+                      className={`${fieldClassCompact} w-full`}
                     />
                     <input
                       aria-label="Qaror"
                       placeholder="Qaror"
                       value={decisionDrafts[task.id]?.decision ?? ""}
                       onChange={(event) => updateDecisionDraft(task.id, "decision", event.target.value)}
-                      className="w-full rounded border border-gray-200 px-2 py-1 text-xs"
+                      className={`${fieldClassCompact} w-full`}
                     />
                     <input
                       aria-label="Sabab"
                       placeholder="Sabab"
                       value={decisionDrafts[task.id]?.reason ?? ""}
                       onChange={(event) => updateDecisionDraft(task.id, "reason", event.target.value)}
-                      className="w-full rounded border border-gray-200 px-2 py-1 text-xs"
+                      className={`${fieldClassCompact} w-full`}
                     />
                     <button
                       type="submit"
                       disabled={recordingDecisionFor === task.id}
-                      className="text-xs text-blue-600 hover:underline disabled:opacity-50"
+                      className={actionLinkClass}
                     >
                       Qaror yozish
                     </button>
@@ -753,23 +777,23 @@ export default function WorkspacePage() {
                 </div>
               )}
               {openTaskReminders[task.id] !== undefined && (
-                <div className="mt-2 space-y-2 border-t border-gray-100 pt-2">
+                <div className="mt-2 space-y-2 border-t border-gray-100 pt-2 dark:border-gray-800">
                   <ul data-testid="reminder-list" className="space-y-1">
                     {openTaskReminders[task.id].map((reminder) => (
-                      <li key={reminder.id} className="text-xs text-gray-500">
+                      <li key={reminder.id} className="text-xs text-gray-500 dark:text-gray-400">
                         {new Date(reminder.remind_at).toLocaleString()} — {reminder.status}
                         {reminder.status === "PENDING_CONFIRMATION" && (
                           <>
                             {" "}
                             <button
                               onClick={() => handleConfirmReminder(task, reminder)}
-                              className="text-blue-600 hover:underline"
+                              className={actionLinkClass}
                             >
                               Tasdiqlash
                             </button>{" "}
                             <button
                               onClick={() => handleCancelReminder(task, reminder)}
-                              className="text-red-600 hover:underline"
+                              className={dangerLinkClass}
                             >
                               Bekor qilish
                             </button>
@@ -780,7 +804,7 @@ export default function WorkspacePage() {
                             {" "}
                             <button
                               onClick={() => handleCancelReminder(task, reminder)}
-                              className="text-red-600 hover:underline"
+                              className={dangerLinkClass}
                             >
                               Bekor qilish
                             </button>
@@ -789,7 +813,7 @@ export default function WorkspacePage() {
                       </li>
                     ))}
                     {openTaskReminders[task.id].length === 0 && (
-                      <li className="text-xs text-gray-500">Hali eslatma yo&apos;q.</li>
+                      <EmptyListItem>Hali eslatma yo&apos;q.</EmptyListItem>
                     )}
                   </ul>
                   <form
@@ -797,7 +821,7 @@ export default function WorkspacePage() {
                       event.preventDefault();
                       handleRequestReminder(task);
                     }}
-                    className="flex items-center gap-2"
+                    className="flex flex-wrap items-center gap-2"
                   >
                     <input
                       aria-label="Eslatma vaqti"
@@ -806,12 +830,12 @@ export default function WorkspacePage() {
                       onChange={(event) =>
                         setReminderDrafts((prev) => ({ ...prev, [task.id]: event.target.value }))
                       }
-                      className="rounded border border-gray-200 px-2 py-1 text-xs"
+                      className={fieldClassCompact}
                     />
                     <button
                       type="submit"
                       disabled={requestingReminderFor === task.id || !reminderDrafts[task.id]}
-                      className="text-xs text-blue-600 hover:underline disabled:opacity-50"
+                      className={actionLinkClass}
                     >
                       Eslatma so&apos;rash
                     </button>
@@ -819,12 +843,14 @@ export default function WorkspacePage() {
                 </div>
               )}
               {openTaskAttachments[task.id] !== undefined && (
-                <div className="mt-2 space-y-2 border-t border-gray-100 pt-2">
+                <div className="mt-2 space-y-2 border-t border-gray-100 pt-2 dark:border-gray-800">
                   <ul data-testid="attachment-list" className="space-y-1">
                     {openTaskAttachments[task.id].map((attachment) => (
-                      <li key={attachment.id} className="text-xs text-gray-500">
+                      <li key={attachment.id} className="text-xs text-gray-500 dark:text-gray-400">
                         {attachment.broken ? (
-                          <span className="text-red-600">Uzilgan havola (fayl o&apos;chirilgan)</span>
+                          <span className="font-medium text-red-600 dark:text-red-400">
+                            Uzilgan havola (fayl o&apos;chirilgan)
+                          </span>
                         ) : (
                           <>
                             {attachment.filename}
@@ -834,14 +860,14 @@ export default function WorkspacePage() {
                         <button
                           onClick={() => handleDetachDocument(task, attachment)}
                           disabled={detachingAttachmentId === attachment.id}
-                          className="text-red-600 hover:underline disabled:opacity-50"
+                          className={dangerLinkClass}
                         >
                           Uzish
                         </button>
                       </li>
                     ))}
                     {openTaskAttachments[task.id].length === 0 && (
-                      <li className="text-xs text-gray-500">Hech qanday fayl bog&apos;lanmagan.</li>
+                      <EmptyListItem>Hech qanday fayl bog&apos;lanmagan.</EmptyListItem>
                     )}
                   </ul>
                   <form
@@ -849,7 +875,7 @@ export default function WorkspacePage() {
                       event.preventDefault();
                       handleAttachDocument(task);
                     }}
-                    className="flex items-center gap-2"
+                    className="flex flex-wrap items-center gap-2"
                   >
                     <select
                       aria-label="Bog'lanadigan fayl"
@@ -857,7 +883,7 @@ export default function WorkspacePage() {
                       onChange={(event) =>
                         setAttachDrafts((prev) => ({ ...prev, [task.id]: event.target.value }))
                       }
-                      className="rounded border border-gray-200 px-2 py-1 text-xs"
+                      className={fieldClassCompact}
                     >
                       <option value="">Fayl tanlang...</option>
                       {documents?.map((doc) => (
@@ -869,7 +895,7 @@ export default function WorkspacePage() {
                     <button
                       type="submit"
                       disabled={attachingFor === task.id || !attachDrafts[task.id]}
-                      className="text-xs text-blue-600 hover:underline disabled:opacity-50"
+                      className={actionLinkClass}
                     >
                       Bog&apos;lash
                     </button>
@@ -878,47 +904,42 @@ export default function WorkspacePage() {
               )}
             </li>
           ))}
-          {tasks !== null && tasks.length === 0 && (
-            <li className="text-sm text-gray-500">Hali task yo&apos;q.</li>
-          )}
+          {tasks !== null && tasks.length === 0 && <EmptyListItem>Hali task yo&apos;q.</EmptyListItem>}
         </ul>
-      </section>
+      </Card>
 
-      <section>
-        <h2 className="mb-3 text-lg font-semibold">Fayllar</h2>
-        <form onSubmit={handleUploadDocument} className="mb-3 flex items-center gap-2">
+      <Card as="section">
+        <SectionHeading className="mb-3">Fayllar</SectionHeading>
+        <form onSubmit={handleUploadDocument} className="mb-3 flex flex-wrap items-center gap-2">
           <input
             ref={documentFileInputRef}
             type="file"
             accept=".pdf,.docx,.xlsx,.txt,.png,.jpg,.jpeg"
             aria-label="Yuklanadigan fayl"
+            className="text-sm text-gray-700 dark:text-gray-300"
           />
-          <button
-            type="submit"
-            disabled={uploadingDocument}
-            className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white disabled:opacity-50"
-          >
+          <button type="submit" disabled={uploadingDocument} className={compactButtonClass + " bg-blue-600 text-white hover:bg-blue-700 focus-visible:ring-blue-600"}>
             Yuklash
           </button>
         </form>
-        <form onSubmit={handleSearchDocuments} className="mb-3 flex items-center gap-2">
+        <form onSubmit={handleSearchDocuments} className="mb-3 flex flex-wrap items-center gap-2">
           <input
             type="text"
             value={documentSearchQuery}
             onChange={(e) => setDocumentSearchQuery(e.target.value)}
             placeholder="Fayllar ichidan qidirish..."
             aria-label="Fayllar ichidan qidirish"
-            className="w-64 rounded-md border border-gray-300 px-2 py-1 text-sm"
+            className={`${fieldClassCompact} w-64`}
           />
           <button
             type="submit"
             disabled={searchingDocuments || documentSearchQuery.trim() === ""}
-            className="rounded-md bg-gray-600 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+            className={`${compactButtonClass} bg-gray-700 text-white hover:bg-gray-600 focus-visible:ring-gray-700`}
           >
             Qidirish
           </button>
           {documentSearchResults !== null && (
-            <button type="button" onClick={handleClearDocumentSearch} className="text-xs text-blue-600 hover:underline">
+            <button type="button" onClick={handleClearDocumentSearch} className={actionLinkClass}>
               Tozalash
             </button>
           )}
@@ -926,13 +947,14 @@ export default function WorkspacePage() {
         {documentSearchResults !== null && (
           <ul data-testid="document-search-results" className="mb-4 space-y-2">
             {documentSearchResults.map((chunk) => (
-              <li key={chunk.id} className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm">
+              <li
+                key={chunk.id}
+                className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700 dark:border-gray-800 dark:bg-gray-950/40 dark:text-gray-300"
+              >
                 {chunk.content}
               </li>
             ))}
-            {documentSearchResults.length === 0 && (
-              <li className="text-sm text-gray-500">Hech narsa topilmadi.</li>
-            )}
+            {documentSearchResults.length === 0 && <EmptyListItem>Hech narsa topilmadi.</EmptyListItem>}
           </ul>
         )}
         <input
@@ -947,30 +969,26 @@ export default function WorkspacePage() {
           {documents?.map((doc) => (
             <li
               key={doc.id}
-              className="flex items-center justify-between rounded-md border border-gray-200 px-3 py-2 text-sm"
+              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-800"
             >
               <div className="flex flex-col">
-                <span>
+                <span className="text-gray-900 dark:text-gray-100">
                   {doc.filename}
                   {doc.superseded_by_id !== null && (
                     <span
                       data-testid="document-superseded-badge"
-                      className="ml-2 rounded bg-gray-200 px-1.5 py-0.5 text-xs text-gray-700"
+                      className="ml-2 inline-flex items-center rounded-full bg-gray-200 px-1.5 py-0.5 text-xs font-medium text-gray-700 dark:bg-gray-800 dark:text-gray-300"
                     >
                       Almashtirilgan
                     </span>
                   )}
                 </span>
-                <span className="text-xs text-gray-500">
+                <span className="text-xs text-gray-500 dark:text-gray-400">
                   {doc.content_type} · {formatFileSize(doc.size_bytes)}
                 </span>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleDownloadDocument(doc)}
-                  className="text-xs text-blue-600 hover:underline"
-                >
+              <div className="flex items-center gap-3">
+                <button type="button" onClick={() => handleDownloadDocument(doc)} className={actionLinkClass}>
                   Yuklab olish
                 </button>
                 {doc.superseded_by_id === null && (
@@ -978,7 +996,7 @@ export default function WorkspacePage() {
                     type="button"
                     onClick={() => handleVersionButtonClick(doc)}
                     disabled={versioningDocumentId === doc.id}
-                    className="text-xs text-blue-600 hover:underline disabled:opacity-50"
+                    className={actionLinkClass}
                   >
                     Yangi versiya yuklash
                   </button>
@@ -987,31 +1005,32 @@ export default function WorkspacePage() {
                   type="button"
                   onClick={() => handleDeleteDocument(doc)}
                   disabled={deletingDocumentId === doc.id}
-                  className="text-xs text-red-600 hover:underline disabled:opacity-50"
+                  className={dangerLinkClass}
                 >
                   O&apos;chirish
                 </button>
               </div>
             </li>
           ))}
-          {documents !== null && documents.length === 0 && (
-            <li className="text-sm text-gray-500">Hali fayl yo&apos;q.</li>
-          )}
+          {documents !== null && documents.length === 0 && <EmptyListItem>Hali fayl yo&apos;q.</EmptyListItem>}
         </ul>
-      </section>
+      </Card>
 
-      <section>
-        <h2 className="mb-3 text-lg font-semibold">Action&apos;lar</h2>
+      <Card as="section">
+        <SectionHeading className="mb-3">Action&apos;lar</SectionHeading>
         <ul className="space-y-2">
           {actions?.map((action) => (
-            <li key={action.id} className="rounded-md border border-gray-200 px-3 py-2 text-sm">
-              <div className="flex items-center justify-between">
+            <li
+              key={action.id}
+              className="rounded-lg border border-gray-200 px-3 py-2.5 text-sm dark:border-gray-800"
+            >
+              <div className="flex items-center justify-between gap-2">
                 <div className="flex flex-col">
-                  <span>{action.tool_name}</span>
-                  <span className="text-xs text-gray-500">risk: {action.risk_level}</span>
+                  <span className="text-gray-900 dark:text-gray-100">{action.tool_name}</span>
+                  <span className="text-xs text-gray-500 dark:text-gray-400">risk: {action.risk_level}</span>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-600">{action.status}</span>
+                <div className="flex items-center gap-3">
+                  <Badge tone={statusTone(action.status)}>{action.status}</Badge>
                   {/* FR-ACT-009: READY cancels outright, RUNNING requests a
                       reversal (COMPENSATING) — the backend decides which,
                       this button just calls the one cancel endpoint. */}
@@ -1020,7 +1039,7 @@ export default function WorkspacePage() {
                       type="button"
                       onClick={() => handleCancelAction(action)}
                       disabled={cancellingActionId === action.id}
-                      className="text-xs text-red-600 hover:underline disabled:opacity-50"
+                      className={dangerLinkClass}
                     >
                       Bekor qilish
                     </button>
@@ -1028,65 +1047,54 @@ export default function WorkspacePage() {
                 </div>
               </div>
               {/* FR-ACT-002: dry-run preview shown for every action, R3+ included. */}
-              <p className="mt-1 text-xs text-gray-500">{action.preview}</p>
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{action.preview}</p>
             </li>
           ))}
-          {actions !== null && actions.length === 0 && (
-            <li className="text-sm text-gray-500">Hali action yo&apos;q.</li>
-          )}
+          {actions !== null && actions.length === 0 && <EmptyListItem>Hali action yo&apos;q.</EmptyListItem>}
         </ul>
-      </section>
+      </Card>
 
-      <section>
-        <h2 className="mb-3 text-lg font-semibold">Bildirishnomalar</h2>
+      <Card as="section">
+        <SectionHeading className="mb-3">Bildirishnomalar</SectionHeading>
         <ul className="space-y-2">
           {notifications?.map((notification) => (
             <li
               key={notification.id}
-              className="flex items-center justify-between rounded-md border border-gray-200 px-3 py-2 text-sm"
+              className="flex items-center justify-between gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-800"
             >
-              <span className={notification.read_at ? "text-gray-400" : ""}>
+              <span className={notification.read_at ? "text-gray-400 dark:text-gray-500" : "text-gray-900 dark:text-gray-100"}>
                 {notification.notification_type} — {notification.reference_type}
               </span>
               {!notification.read_at && (
-                <button
-                  onClick={() => handleMarkRead(notification)}
-                  className="text-xs text-blue-600 hover:underline"
-                >
+                <button onClick={() => handleMarkRead(notification)} className={actionLinkClass}>
                   O&apos;qildi deb belgilash
                 </button>
               )}
             </li>
           ))}
           {notifications !== null && notifications.length === 0 && (
-            <li className="text-sm text-gray-500">Bildirishnoma yo&apos;q.</li>
+            <EmptyListItem>Bildirishnoma yo&apos;q.</EmptyListItem>
           )}
         </ul>
-      </section>
+      </Card>
 
-      <section>
-        <h2 className="mb-3 text-lg font-semibold">A&apos;zolar</h2>
+      <Card as="section">
+        <SectionHeading className="mb-3">A&apos;zolar</SectionHeading>
         <ul className="space-y-1">
           {members?.map((member) => (
             <li
               key={member.membership_id ?? member.user_id}
-              className="flex items-center justify-between text-sm"
+              className="flex items-center justify-between gap-2 py-1 text-sm"
             >
-              <span>{member.display_name}</span>
-              <div className="flex items-center gap-2">
-                <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-600">{member.role}</span>
+              <span className="text-gray-900 dark:text-gray-100">{member.display_name}</span>
+              <div className="flex items-center gap-3">
+                <Badge>{member.role}</Badge>
                 {member.membership_id !== null && (
                   <>
-                    <button
-                      onClick={() => handleToggleMemberRole(member)}
-                      className="text-xs text-blue-600 hover:underline"
-                    >
+                    <button onClick={() => handleToggleMemberRole(member)} className={actionLinkClass}>
                       {OTHER_ROLE[member.role as WorkspaceRole]} qilish
                     </button>
-                    <button
-                      onClick={() => handleRemoveMember(member)}
-                      className="text-xs text-red-600 hover:underline"
-                    >
+                    <button onClick={() => handleRemoveMember(member)} className={dangerLinkClass}>
                       Chiqarish
                     </button>
                   </>
@@ -1095,28 +1103,25 @@ export default function WorkspacePage() {
             </li>
           ))}
         </ul>
-      </section>
+      </Card>
 
-      <section>
-        <h2 className="mb-3 text-lg font-semibold">Audit</h2>
+      <Card as="section">
+        <SectionHeading className="mb-3">Audit</SectionHeading>
         <form
           onSubmit={(event) => {
             event.preventDefault();
             setAppliedTraceId(traceIdInput.trim());
           }}
-          className="mb-3 flex gap-2 text-xs"
+          className="mb-3 flex flex-wrap gap-2"
         >
           <input
             type="text"
             value={traceIdInput}
             onChange={(event) => setTraceIdInput(event.target.value)}
             placeholder="trace_id bo'yicha filtrlash"
-            className="flex-1 rounded-md border border-gray-300 px-2 py-1.5 font-mono focus:border-black focus:outline-none"
+            className={`${fieldClassCompact} min-w-[14rem] flex-1 font-mono`}
           />
-          <button
-            type="submit"
-            className="rounded border border-gray-300 px-2 py-1 font-medium text-gray-700"
-          >
+          <button type="submit" className={compactSecondaryButtonClass}>
             Filtr
           </button>
           {appliedTraceId !== "" && (
@@ -1126,7 +1131,7 @@ export default function WorkspacePage() {
                 setTraceIdInput("");
                 setAppliedTraceId("");
               }}
-              className="text-red-600 hover:underline"
+              className={dangerLinkClass}
             >
               Tozalash
             </button>
@@ -1134,21 +1139,24 @@ export default function WorkspacePage() {
         </form>
         <ul className="space-y-2">
           {auditEvents?.map((event) => (
-            <li key={event.id} className="rounded-md border border-gray-200 px-3 py-2 text-sm">
-              <div className="flex items-center justify-between">
-                <span className="font-medium">{event.event_type}</span>
-                <span className="text-xs text-gray-500">
+            <li
+              key={event.id}
+              className="rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-800"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-medium text-gray-900 dark:text-gray-100">{event.event_type}</span>
+                <span className="text-xs text-gray-500 dark:text-gray-400">
                   {new Date(event.occurred_at).toLocaleString()}
                 </span>
               </div>
-              <div className="flex items-center justify-between text-xs text-gray-500">
+              <div className="flex items-center justify-between gap-2 text-xs text-gray-500 dark:text-gray-400">
                 <span>{event.actor_id}</span>
                 <button
                   onClick={() => {
                     setTraceIdInput(event.trace_id);
                     setAppliedTraceId(event.trace_id);
                   }}
-                  className="font-mono text-gray-500 hover:text-blue-600 hover:underline"
+                  className="rounded font-mono text-gray-500 hover:text-blue-600 hover:underline dark:text-gray-400 dark:hover:text-blue-400"
                   title="Shu trace_id bo'yicha filtrlash"
                 >
                   {event.trace_id}
@@ -1157,10 +1165,10 @@ export default function WorkspacePage() {
             </li>
           ))}
           {auditEvents !== null && auditEvents.length === 0 && (
-            <li className="text-sm text-gray-500">Audit yozuvi yo&apos;q.</li>
+            <EmptyListItem>Audit yozuvi yo&apos;q.</EmptyListItem>
           )}
         </ul>
-      </section>
+      </Card>
     </main>
   );
 }
