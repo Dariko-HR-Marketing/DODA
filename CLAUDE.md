@@ -10065,3 +10065,65 @@ CI'ning keyless holatini simulyatsiya qilish maqsadida) vaqtincha
 ajratilgan edi — yakunida zaxira nusxadan tiklanib, `diff` bilan
 bayt-ba-bayt bir xil ekani tasdiqlandi, hech qanday qiymat chat
 matniga yoki logga chiqmadi.
+**Yangi sessiya konteyneri — bu safar avvalgisidan farqli, haqiqatda
+bo'sh Postgres bilan — ikkita real provisioning xatosini ochib berdi,
+ikkalasi ham endi tuzatildi.** `.env` fayli (gitignored, hech qachon
+persist bo'lmaydi) yo'q edi — bu kutilgan (yangi konteyner, Telegram/
+Google/AI provider kredensiallari shu sandbox'ga xos edi, qaytarilmaydi)
+— lekin `backend/.venv/bin/pytest` ishga tushirilganda **353 test
+"password authentication failed for user doda_app"** bilan qulagani
+aniqlandi, bu esa kutilmagan edi: `SessionStart` hook "ready" deb log
+yozgan edi.
+
+**Birinchi xato — `.claude/hooks/session-start.sh`ning o'zida, haqiqiy va
+jimgina muvaffaqiyatsiz bo'ladigan.** `01-create-app-role.sql` (CREATE
+ROLE doda_app bilan boshlanadi) hook tomonidan `doda` roli nomidan
+chaqirilardi (`PGPASSWORD=doda psql -U doda ...`), lekin `doda` faqat
+`createdb nosuperuser` bilan yaratilgan — CREATEROLE yo'q. CREATE ROLE
+shu sababli har safar rad etilardi, va undan keyingi barcha GRANT
+qatorlari ham (`doda_app` mavjud emasligi uchun) xato berardi — lekin
+oddiy `psql` (`-v ON_ERROR_STOP=1`siz) ichki SQL xatosida 0 bilan
+chiqadi, shuning uchun `set -euo pipefail` buni hech qachon
+ushlamagan. Natija: `doda_app` roli HECH QACHON yaratilmagan, lekin
+hook "ready" deb da'vo qilgan — RISK-006 sinfining ("testi yo'q nazorat
+— nazorat emas") yana bir nusxasi, bu safar test emas, bootstrap
+skriptining o'zida. Tuzatish: shu qadam endi `postgres` (superuser)
+nomidan chaqiriladi — bu production'dagi `docker-entrypoint-initdb.d`
+yo'lining (u ham superuser'dan ishga tushadi) aynan o'zi — va
+`-v ON_ERROR_STOP=1` qo'shildi, kelajakda shunga o'xshash xato yana
+jimgina o'tib ketmasligi uchun. Haqiqiyligi to'g'ridan-to'g'ri
+tasdiqlandi: tuzatishdan oldin `doda_app` ulanishi haqiqatda rad etilgan
+edi (`psql -U doda_app`: parol xatosi, "role does not exist"), skriptni
+qo'lda to'g'ri rol bilan ishga tushirgandan keyin ulanish darhol
+muvaffaqiyatli bo'ldi.
+
+**Ikkinchi xato — bu konteynerning o'zida `postgresql-16-pgvector` apt
+paketi oldindan o'rnatilmagan edi** (avvalgi konteyner(lar)da bor edi,
+bu safar yo'q — tasodifiy muhit farqi, kod/skript xatosi emas).
+`CREATE EXTENSION vector` shu sababli "extension is not available"
+bilan muvaffaqiyatsiz bo'lardi. `apt-get install postgresql-16-pgvector`
+bilan tuzatildi — bu takrorlanadigan, repo'ga tegishli o'zgarish emas
+(hook o'zi apt install qilmaydi, muhit darajasidagi narsa), shuning
+uchun kod bazasiga yozilmadi, faqat shu yerda eslatma sifatida.
+
+**Uchinchi, haqiqiy va kod bazasiga tegishli xato: SQLAlchemy 2.1 (yangi
+chiqarilgan, `pyproject.toml`'da `>=2.0` bilan pin qilinmagan) o'zining
+`sqlalchemy.ext.mypy.plugin`ini butunlay OLIB TASHLAGAN** — bu plugin
+endi mavjud emas, `mypy`ning o'zi "No module named 'sqlalchemy.ext.mypy'"
+bilan butunlay ishlamay qoladi (`mypy src/doda`/`mypy scripts`
+ikkalasi ham). Bu CI'ning keyingi `pip install -e ".[dev]"` chaqiruvida
+ham HAQIQATDA takrorlanadigan muammo edi (lock fayl yo'q, demak CI ham
+endi eng yangi SQLAlchemy'ni tortib oladi) — sintetik emas, kelajakdagi
+real CI muvaffaqiyatsizligi. Tekshirildi: bu plugin asosan eski,
+annotatsiyasiz declarative uslubdagi modellar uchun kerak edi — bu kod
+bazasi boshidanoq `Mapped[...]` annotatsiyalaridan foydalanadi (SQLAlchemy
+2.0'ning o'z, annotatsiya-asosli uslubi), shuning uchun plugin'ni olib
+tashlash xavfsiz: `mypy src/doda`/`mypy scripts` ikkalasi ham plugin'siz
+"Success: no issues found" qaytardi — yashirilgan xato yo'q, faqat
+endi ishlamaydigan konfiguratsiya qatori olib tashlandi.
+`pyproject.toml`dagi `plugins = ["sqlalchemy.ext.mypy.plugin"]` qatori
+o'chirildi.
+
+591 test, barchasi real Postgres'da (to'liq qayta tiklangan DB
+provisioning bilan); `ruff format`/`ruff check`/`mypy src/doda`/
+`mypy scripts` toza.

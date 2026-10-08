@@ -81,7 +81,15 @@ log "installing backend dependencies"
 log "applying migrations"
 .venv/bin/alembic upgrade head
 log "ensuring the least-privilege doda_app role and its grants"
-PGPASSWORD=doda psql -q -h localhost -U doda -d doda -f ../infra/postgres-init/01-create-app-role.sql
+# Must run as `postgres` (superuser), not `doda`: the script's own first
+# statement is CREATE ROLE, which requires CREATEROLE — a privilege `doda`
+# deliberately does not have (line 59 above). Running it as `doda` fails
+# that statement and every one after it, but plain `psql` (no
+# -v ON_ERROR_STOP=1) exits 0 regardless, so `set -euo pipefail` never
+# catches it — this was a real, silent bug: doda_app ends up simply not
+# existing, and every later `pytest` run fails on
+# "password authentication failed for user doda_app" with no hint why.
+su postgres -c "psql -q -v ON_ERROR_STOP=1 -d doda -f $PROJECT_DIR/infra/postgres-init/01-create-app-role.sql"
 
 # --- Frontend dependencies --------------------------------------------------
 cd "$PROJECT_DIR/frontend"
